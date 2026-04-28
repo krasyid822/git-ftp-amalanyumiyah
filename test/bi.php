@@ -46,12 +46,12 @@ if (!in_array($requestPath, $allowedPaths, true)) {
 	exit;
 }
 
-function bi_h($value)
+function bi_h(mixed $value): string
 {
 	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
 }
 
-function bi_month_label($month)
+function bi_month_label(mixed $month): string
 {
 	$bulan = [
 		'01' => 'Januari',
@@ -75,7 +75,7 @@ function bi_month_label($month)
 	return ($bulan[$match[2]] ?? $match[2]) . ' ' . $match[1];
 }
 
-function bi_read_json($file)
+function bi_read_json(string $file): array
 {
 	if (!is_file($file)) {
 		return [];
@@ -90,7 +90,7 @@ function bi_read_json($file)
 	return is_array($data) ? $data : [];
 }
 
-function bi_available_months(array $data)
+function bi_available_months(array $data): array
 {
 	$months = [];
 
@@ -106,7 +106,7 @@ function bi_available_months(array $data)
 	return $months;
 }
 
-function bi_rawatib_detail_count(array $data)
+function bi_rawatib_detail_count(array $data): int
 {
 	$keys = [];
 
@@ -126,7 +126,7 @@ function bi_rawatib_detail_count(array $data)
 	return $count > 0 ? $count : 5;
 }
 
-function bi_is_filled_value($value)
+function bi_is_filled_value(mixed $value): bool
 {
 	if (is_string($value)) {
 		return trim($value) !== '';
@@ -135,12 +135,12 @@ function bi_is_filled_value($value)
 	return !empty($value);
 }
 
-function bi_format_person_name($name)
+function bi_format_person_name(string $name): string
 {
 	return ucwords(str_replace(['_', '-'], ' ', $name));
 }
 
-function bi_format_group_name($name)
+function bi_format_group_name(string $name): string
 {
 	$normalised = str_replace(['_', '-'], ' ', $name);
 	if (preg_match('/^[a-z0-9]+$/i', $normalised) && strlen($normalised) <= 4) {
@@ -150,7 +150,7 @@ function bi_format_group_name($name)
 	return ucwords($normalised);
 }
 
-function bi_extract_redirect_target($indexFile)
+function bi_extract_redirect_target(string $indexFile): ?string
 {
 	if (!is_file($indexFile)) {
 		return null;
@@ -181,12 +181,8 @@ function bi_extract_redirect_target($indexFile)
 	return null;
 }
 
-function bi_resolve_redirect_path($basePath, $relativeTarget)
+function bi_resolve_redirect_path(string $basePath, string $relativeTarget): ?string
 {
-	if (!is_string($relativeTarget)) {
-		return null;
-	}
-
 	$relativeTarget = trim($relativeTarget);
 	if ($relativeTarget === '' || preg_match('/^[a-z][a-z0-9+.-]*:\/\//i', $relativeTarget)) {
 		return null;
@@ -198,7 +194,7 @@ function bi_resolve_redirect_path($basePath, $relativeTarget)
 	return $resolvedPath !== false && is_dir($resolvedPath) ? $resolvedPath : null;
 }
 
-function bi_resolve_participant_data_file($folderPath)
+function bi_resolve_participant_data_file(string $folderPath): array
 {
 	$directDataFile = $folderPath . DIRECTORY_SEPARATOR . 'data_amalan.json';
 	if (is_file($directDataFile)) {
@@ -231,7 +227,7 @@ function bi_resolve_participant_data_file($folderPath)
 	return [null, null];
 }
 
-function bi_is_mentor_folder($folderPath, $resolvedPath = null)
+function bi_is_mentor_folder(string $folderPath, ?string $resolvedPath = null): bool
 {
 	$paths = [$folderPath];
 	if (is_string($resolvedPath) && $resolvedPath !== '' && $resolvedPath !== $folderPath) {
@@ -247,7 +243,7 @@ function bi_is_mentor_folder($folderPath, $resolvedPath = null)
 	return false;
 }
 
-function bi_build_participant_record($groupFolder, $folder, array $data, $analysisScope, $isMentor = false)
+function bi_build_participant_record(string $groupFolder, string $folder, array $data, string $analysisScope, bool $isMentor = false): array
 {
 	$groupLabel = bi_format_group_name($groupFolder);
 	$folderLabel = bi_format_person_name($folder);
@@ -267,7 +263,7 @@ function bi_build_participant_record($groupFolder, $folder, array $data, $analys
 	];
 }
 
-function bi_parse_rawatib_day(array $monthData, $day, $rawatibDetailCount)
+function bi_parse_rawatib_day(array $monthData, int $day, int $rawatibDetailCount): array
 {
 	$rawValue = $monthData['rawatib'][$day] ?? '';
 	$hasData = bi_is_filled_value($rawValue);
@@ -303,7 +299,7 @@ function bi_parse_rawatib_day(array $monthData, $day, $rawatibDetailCount)
 	];
 }
 
-function bi_analyze_month(array $monthData, $daysInMonth, array $daftar_amalan, $rawatibDetailCount)
+function bi_analyze_month(array $monthData, int $daysInMonth, array $daftar_amalan, int $rawatibDetailCount): array
 {
 	$categoryBreakdown = [];
 	foreach ($daftar_amalan as $categoryName => $items) {
@@ -382,7 +378,7 @@ function bi_analyze_month(array $monthData, $daysInMonth, array $daftar_amalan, 
 	];
 }
 
-function bi_scan_participants($analysisRoot, $analysisScope = 'group')
+function bi_scan_participants(string $analysisRoot, string $analysisScope = 'group'): array
 {
 	$participants = [];
 	$skippedFolders = [];
@@ -465,7 +461,7 @@ function bi_scan_participants($analysisRoot, $analysisScope = 'group')
 	return [$participants, $skippedFolders];
 }
 
-function bi_resolve_month($requestedMonth, array $availableMonths)
+function bi_resolve_month(mixed $requestedMonth, array $availableMonths): string
 {
 	$currentMonth = date('Y-m');
 
