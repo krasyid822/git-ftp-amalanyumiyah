@@ -3,119 +3,364 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Forbidden - Not Found</title>
+  <title>Halaman Tidak Ditemukan</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,300;8..144,400;8..144,500;8..144,600;8..144,700&display=swap" rel="stylesheet">
   <style>
-    /* Dark theme for 404 */
-    body{
-      font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
-      line-height:1.5;
-      background:#071021; /* dark navy */
-      color:#e6f2f8; /* light text */
-      margin:0;padding:40px
+    .material-symbols-rounded {
+      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
     }
-    .card{
-      max-width:880px;margin:32px auto;padding:28px 32px;
-      background:linear-gradient(180deg,#071826 0%, #0b2540 100%);
-      border-radius:12px;
-      box-shadow:0 8px 30px rgba(0,0,0,0.6);
-      border:1px solid rgba(255,255,255,0.04);
-      position:relative;
-      /* Allow content to wrap and avoid overflow */
-      white-space: normal;
+
+    :root {
+      --md-sys-color-primary: #006A6A;
+      --md-sys-color-on-primary: #FFFFFF;
+      --md-sys-color-primary-container: #6FF7F7;
+      --md-sys-color-on-primary-container: #002020;
+      --md-sys-color-secondary: #4A6363;
+      --md-sys-color-on-secondary: #FFFFFF;
+      --md-sys-color-secondary-container: #CCE8E7;
+      --md-sys-color-on-secondary-container: #051F1F;
+      --md-sys-color-tertiary: #4B607C;
+      --md-sys-color-on-tertiary: #FFFFFF;
+      --md-sys-color-tertiary-container: #D3E4FF;
+      --md-sys-color-on-tertiary-container: #041C35;
+      --md-sys-color-error: #BA1A1A;
+      --md-sys-color-on-error: #FFFFFF;
+      --md-sys-color-error-container: #FFDAD6;
+      --md-sys-color-on-error-container: #410002;
+      --md-sys-color-surface: #FAFDFC;
+      --md-sys-color-on-surface: #191C1C;
+      --md-sys-color-surface-variant: #DAE5E3;
+      --md-sys-color-on-surface-variant: #3F4948;
+      --md-sys-color-outline: #6F7978;
+      --md-sys-color-outline-variant: #BEC9C7;
+      --md-sys-color-background: #F4FBF9;
+      --md-sys-color-on-background: #191C1C;
+      --md-sys-color-surface-container-lowest: #FFFFFF;
+      --md-sys-color-surface-container-low: #F0F7F6;
+      --md-sys-color-surface-container: #EAF1F0;
+      --md-sys-color-surface-container-high: #E4EBEA;
+      --md-sys-color-surface-container-highest: #DEE5E4;
+      --md-sys-elevation-level1: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+      --md-sys-elevation-level2: 0px 1px 2px 0px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
+      --md-sys-shape-corner-medium: 12px;
+      --md-sys-shape-corner-large: 16px;
+      --md-sys-shape-corner-extra-large: 28px;
+      --md-sys-shape-corner-full: 9999px;
+      --font-family: 'Roboto Flex', -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      --color-primary: var(--md-sys-color-primary);
+      --color-primary-dark: #004D4D;
+      --color-secondary: var(--md-sys-color-secondary-container);
+      --color-background: var(--md-sys-color-background);
+      --color-surface: var(--md-sys-color-surface);
+      --color-text: var(--md-sys-color-on-surface);
+      --color-text-light: var(--md-sys-color-on-surface-variant);
+      --color-border: var(--md-sys-color-outline-variant);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--font-family);
+      margin: 0;
+      background-color: var(--color-background);
+      color: var(--color-text);
+      line-height: 1.6;
+      position: relative;
+      overflow-x: hidden;
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        radial-gradient(circle at top left, rgba(0, 106, 106, 0.08), transparent 28%),
+        radial-gradient(circle at 82% 8%, rgba(75, 96, 124, 0.08), transparent 22%),
+        linear-gradient(rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
+      background-size: auto, auto, 84px 84px, 84px 84px;
+      mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.85), transparent 96%);
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .container {
+      max-width: 1200px;
+      margin: 30px auto;
+      padding: 20px 32px 56px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .main-header,
+    .form-container,
+    .panel {
+      background: #FFFFFF;
+      border-radius: 12px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.8);
+      border: 1px solid #d0d0d0;
+      position: relative;
+    }
+
+    .main-header {
+      text-align: center;
+      margin-bottom: 24px;
+      padding: 32px 24px;
+    }
+
+    .error-chip,
+    .nama-pengguna {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+    }
+
+    .error-chip {
+      padding: 8px 16px;
+      margin-bottom: 14px;
+      background: linear-gradient(180deg, #D6EFED 0%, #CCE8E7 100%);
+      color: var(--md-sys-color-on-secondary-container);
+      border: 1px solid #B0D0CE;
+      font-size: 0.875rem;
+    }
+
+    .main-header h1 {
+      margin: 0;
+      font-size: clamp(2.25rem, 4vw, 4.2rem);
+      line-height: 0.98;
+      letter-spacing: -0.05em;
+      color: var(--md-sys-color-on-background);
+      font-weight: 700;
+    }
+
+    .main-header p {
+      margin: 10px 0 0;
+      color: var(--md-sys-color-on-surface-variant);
+      font-size: 1rem;
+    }
+
+    .nama-pengguna {
+      margin-top: 18px;
+      padding: 8px 20px;
+      background: linear-gradient(180deg, #D6EFED 0%, #CCE8E7 100%);
+      color: var(--md-sys-color-on-secondary-container);
+      border: 1px solid #B0D0CE;
+      font-size: 0.875rem;
+    }
+
+    .hero-visual {
+      margin-top: 20px;
+      padding: 12px;
+      border-radius: var(--md-sys-shape-corner-large);
+      background: var(--md-sys-color-surface-container-low);
+      border: 1px solid var(--color-border);
+      box-shadow: var(--md-sys-elevation-level1);
+    }
+
+    .hero-visual img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 10px;
+      border: 1px solid rgba(4, 50, 65, 0.08);
+      background: #FFFFFF;
+    }
+
+    .form-container {
+      padding: 32px;
+      margin-bottom: 40px;
+    }
+
+    h2 {
+      font-size: 1.75rem;
+      font-weight: 700;
+      margin: 0 0 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+      text-align: left;
+      color: var(--md-sys-color-on-surface);
+    }
+
+    .quick-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin-bottom: 28px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--md-sys-color-outline-variant);
+    }
+
+    .nav-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 12px 20px;
+      border-radius: 6px;
+      background: var(--md-sys-color-primary);
+      color: #FFFFFF;
+      text-decoration: none;
+      font-weight: 700;
+      font-size: 0.9375rem;
+      border: 1px solid #004D4D;
+      transition: all 0.2s ease;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    }
+
+    .nav-button:hover {
+      background: #008585;
+      box-shadow: 0 3px 6px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+      transform: translateY(-1px);
+    }
+
+    .nav-button.secondary {
+      background: linear-gradient(180deg, #D6EFED 0%, #CCE8E7 100%);
+      color: var(--md-sys-color-on-secondary-container);
+      border-color: #B0D0CE;
+    }
+
+    .panel {
+      background: #FAFAFA;
+      padding: 24px;
+      border-radius: 12px;
+      margin-top: 16px;
+    }
+
+    .panel + .panel {
+      margin-top: 20px;
+    }
+
+    .panel p {
+      margin: 8px 0;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    code {
+      background: #FFFFFF;
+      color: var(--md-sys-color-on-surface);
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-family: SFMono-Regular, Consolas, monospace;
+      border: 1px solid rgba(11, 37, 51, 0.08);
+      display: inline-block;
+      max-width: 100%;
+      white-space: pre-wrap;
       word-break: break-word;
       overflow-wrap: anywhere;
     }
-    h1{margin:0 0 8px;font-size:1.6rem;color:#eaf8ff}
-    p{margin:8px 0;color:#c9e6f3}
-    code{
-      background:#072233;
-      color:#bfeef1;
-      padding:4px 8px;border-radius:6px;
-      font-family:SFMono-Regular,Consolas,monospace;
-      border:1px solid rgba(255,255,255,0.04);
-      /* Wrap long code/URLs */
-      display:inline-block;
-      max-width:100%;
-      white-space:pre-wrap;
-      word-break:break-word;
-      overflow-wrap:anywhere;
-    }
-    .example{
-      background:#071826;padding:12px;border-radius:8px;margin:12px 0;
-      border:1px dashed rgba(191,238,241,0.06);
-      white-space:pre-wrap;
-      word-break:break-word;
-      overflow-wrap:anywhere;
-    }
-    ul{margin:8px 0 12px 20px;color:#bcdfe8}
-    .actions{display:flex;gap:12px;margin-top:18px}
-    a.button{
-      display:inline-block;padding:10px 14px;background:#1f9989;color:#042226;border-radius:8px;text-decoration:none;font-weight:700
-    }
-    a.button:hover{background:#2bb09f}
-    a.link{color:#6fe0d0}
-    .muted{color:#9fbcc7;font-size:0.95rem}
-    /* Theme toggle button (top-right of card) */
-    .theme-toggle{position:absolute;top:14px;right:14px}
-    .theme-toggle button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:1rem}
-    .theme-toggle button:hover{background:rgba(255,255,255,0.02)}
 
-    /* Light theme overrides when body has class 'light' */
-    body.light{background:#f6f8fb;color:#0b2533}
-    body.light .card{background:linear-gradient(180deg,#ffffff 0%, #f1f6fb 100%);border:1px solid rgba(11,37,51,0.06);box-shadow:0 6px 20px rgba(9,30,45,0.06)}
-    body.light h1{color:#043047}
-    body.light p, body.light ul{color:#25414f}
-    body.light code{background:#f3f7fb;color:#063241;border:1px solid rgba(4,50,65,0.04)}
-    body.light .example{background:#f8fbff;border:1px dashed rgba(4,50,65,0.04)}
-    body.light a.button{background:#e6f7f3;color:#043233}
-    body.light a.button:hover{background:#d0f0ea}
-    body.light a.link{color:#0b7280}
+    .example {
+      background: #F8FBFF;
+      padding: 12px 14px;
+      border-radius: 8px;
+      margin: 12px 0;
+      border: 1px dashed rgba(4, 50, 65, 0.08);
+      white-space: pre-wrap;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+
+    .muted {
+      color: var(--md-sys-color-on-surface-variant);
+      font-size: 0.95rem;
+    }
+
+    ul {
+      margin: 8px 0 12px 20px;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    .footer-note {
+      margin-top: 18px;
+      color: var(--md-sys-color-on-surface-variant);
+    }
+
+    @media (max-width: 720px) {
+      .container {
+        padding: 18px 14px 48px;
+      }
+
+      .main-header,
+      .form-container,
+      .panel {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+
+      h1 {
+        font-size: 2.35rem;
+      }
+
+      .quick-nav {
+        flex-direction: column;
+      }
+
+      .nav-button {
+        width: 100%;
+      }
+    }
   </style>
 </head>
 <body>
-  <main class="card">
-    <div style="margin-bottom:10px">
-      <h1 style="font-size:1.9rem;margin:0 0 6px;color:#ffeccf">Buka Bilah Alamat dan edit URL Anda</h1>
-      <p style="margin:0 0 8px;color:#d6f3ee">Buka alamat di browser lalu ganti bagian grup dan nama mentee sesuai milik Anda.</p>
-      <div style="margin-top:8px">
-        <img src="https://raw.githubusercontent.com/krasyid822/Drive/548d7f24884f75c941b7b5d6c86b9c6a71ba3e6b/lv_0_20251130095609.gif" alt="contoh URL GIF" style="max-width:100%;border-radius:8px;border:1px solid rgba(255,255,255,0.04)" />
+  <main class="container">
+    <section class="main-header">
+      <span class="error-chip">404</span>
+      <h1>Halaman tidak ditemukan</h1>
+      <p>Buka alamat di browser lalu ganti bagian grup dan nama mentee sesuai milik Anda.</p>
+      <div class="hero-visual">
+        <img src="https://raw.githubusercontent.com/krasyid822/Drive/548d7f24884f75c941b7b5d6c86b9c6a71ba3e6b/lv_0_20251130095609.gif" alt="contoh URL GIF">
       </div>
-    </div>
-    <h1>404/403</h1>
-    <p>Sepertinya alamat yang Anda buka tidak ditemukan atau ditolak. Ada beberapa kemungkinan:</p>
-    <ul>
-      <li>Anda salah ketik URL.</li>
-      <li>Alamat belum terdaftar untuk grup/mentee Anda.</li>
-      <li>Kode grup/mentee belum dibuat oleh pembuat webapp.</li>
-    </ul>
+      <span class="nama-pengguna">Tracker Amalan Yaumiyah</span>
+    </section>
 
-    <p class="muted">Format URL yang benar untuk tiap mentee di web ini adalah:</p>
-    <div class="example"><code>https://amalanyaumiyah.xo.je/&lt;kode_nama_grup_mentoring&gt;/&lt;kode_nama_mentee&gt;</code></div>
+    <section class="form-container">
+      <h2>Cek URL Anda</h2>
+      <div class="quick-nav">
+        <a class="nav-button secondary" href="/test/bi/">Buka Dasbor BI Semua Kelompok</a>
+      </div>
 
-    <h2 style="margin-top:8px">Penjelasan singkat</h2>
-    <ul>
-      <li><strong><code>kode_nama_grup_mentoring</code></strong> dibuat berdasarkan nama grup saat folder tim dibuat. Kode ini bersifat tetap — jika grup mengganti nama, kode tidak berubah kecuali ada permintaan khusus untuk menggantinya. Kode biasanya merupakan singkatan dari nama grup (tanpa spasi dan karakter khusus).</li>
-      <li><strong><code>kode_nama_mentee</code></strong> dibuat berdasarkan nama panggilan (nickname) mentee atau user. Dibuat unik dan tidak mirip dengan pengguna lain.</li>
-    </ul>
+      <div class="panel">
+        <p>Sepertinya alamat yang Anda buka tidak ditemukan atau ditolak. Ada beberapa kemungkinan:</p>
+        <ul>
+          <li>Anda salah ketik URL.</li>
+          <li>Alamat belum terdaftar untuk grup atau mentee Anda.</li>
+          <li>Kode grup atau mentee belum dibuat oleh pembuat webapp.</li>
+        </ul>
 
-    <p>Contoh URL yang valid:</p>
-    <div class="example"><code>https://amalanyaumiyah.xo.je/abcdev/rasyid</code> atau <code>https://amalanyaumiyah.xo.je/mentor-team/andi</code></div>
+        <p class="muted">Format URL yang benar untuk tiap mentee di web ini adalah:</p>
+        <div class="example"><code>https://amalanyaumiyah.xo.je/&lt;kode_nama_grup_mentoring&gt;/&lt;kode_nama_mentee&gt;</code></div>
+        <p class="muted">Contoh URL yang valid:</p>
+        <div class="example"><code>https://amalanyaumiyah.xo.je/abcdev/rasyid</code> atau <code>https://amalanyaumiyah.xo.je/mentor-team/andi</code></div>
+      </div>
 
-    <h2 style="margin-top:8px">Bagaimana jika alamat belum terdaftar?</h2>
-    <p>Jika Anda yakin URL sudah benar tetapi tetap tidak ditemukan, kemungkinan besar akun/grup Anda belum didaftarkan. Silakan meminta pendaftaran kepada pembuat webapp ini (pemilik/administrator).</p>
-    <p class="muted">Saat menghubungi pembuat webapp, sebutkan:</p>
-    <ul>
-      <li>Nama grup mentoring (untuk pembuatan <code>kode_nama_grup_mentoring</code>).</li>
-      <li>Nama panggilan Anda (untuk pembuatan <code>kode_nama_mentee</code>).</li>
-      <!-- <li>URL yang ingin Anda gunakan (jika Anda memiliki preferensi kode).</li> -->
-    </ul>
+      <div class="panel">
+        <h2>Penjelasan singkat</h2>
+        <ul>
+          <li><strong><code>kode_nama_grup_mentoring</code></strong> dibuat berdasarkan nama grup saat folder tim dibuat. Kode ini bersifat tetap. Jika grup mengganti nama, kode tidak berubah kecuali ada permintaan khusus untuk menggantinya. Kode biasanya merupakan singkatan dari nama grup tanpa spasi dan karakter khusus.</li>
+          <li><strong><code>kode_nama_mentee</code></strong> dibuat berdasarkan nama panggilan atau nickname mentee. Dibuat unik dan tidak mirip dengan pengguna lain.</li>
+        </ul>
 
-    <p class="muted">Catatan: pembuat webapp akan membuat <em>kode</em> berdasarkan singkatan nama grup dan nickname; bila ingin mengganti kode di masa depan, harus meminta admin untuk memperbarui secara manual.</p>
+        <p>Bagaimana jika alamat belum terdaftar?</p>
+        <p>Jika Anda yakin URL sudah benar tetapi tetap tidak ditemukan, kemungkinan besar akun atau grup Anda belum didaftarkan. Silakan meminta pendaftaran kepada pembuat webapp ini, yaitu pemilik atau administrator.</p>
 
-    <!-- <div class="actions">
-      <a class="button" href="/">Kembali ke Beranda</a>
-      <a class="link" href="/readme.md">Informasi & Kontak Pembuat</a>
-    </div> -->
+        <p class="muted">Saat menghubungi pembuat webapp, sebutkan:</p>
+        <ul>
+          <li>Nama grup mentoring untuk pembuatan <code>kode_nama_grup_mentoring</code>.</li>
+          <li>Nama panggilan Anda untuk pembuatan <code>kode_nama_mentee</code>.</li>
+        </ul>
+
+        <p class="muted">Catatan: pembuat webapp akan membuat kode berdasarkan singkatan nama grup dan nickname. Bila ingin mengganti kode di masa depan, harus meminta admin untuk memperbarui secara manual.</p>
+        <p class="footer-note">Silakan kembali dan periksa nama grup serta nama mentee yang dituju.</p>
+      </div>
+    </section>
   </main>
 </body>
 </html>
