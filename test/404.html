@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Forbidden - Not Found</title>
+  <style>
+    /* Dark theme for 404 */
+    body{
+      font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;
+      line-height:1.5;
+      background:#071021; /* dark navy */
+      color:#e6f2f8; /* light text */
+      margin:0;padding:40px
+    }
+    .card{
+      max-width:880px;margin:32px auto;padding:28px 32px;
+      background:linear-gradient(180deg,#071826 0%, #0b2540 100%);
+      border-radius:12px;
+      box-shadow:0 8px 30px rgba(0,0,0,0.6);
+      border:1px solid rgba(255,255,255,0.04);
+      position:relative;
+      /* Allow content to wrap and avoid overflow */
+      white-space: normal;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+    }
+    h1{margin:0 0 8px;font-size:1.6rem;color:#eaf8ff}
+    p{margin:8px 0;color:#c9e6f3}
+    code{
+      background:#072233;
+      color:#bfeef1;
+      padding:4px 8px;border-radius:6px;
+      font-family:SFMono-Regular,Consolas,monospace;
+      border:1px solid rgba(255,255,255,0.04);
+      /* Wrap long code/URLs */
+      display:inline-block;
+      max-width:100%;
+      white-space:pre-wrap;
+      word-break:break-word;
+      overflow-wrap:anywhere;
+    }
+    .example{
+      background:#071826;padding:12px;border-radius:8px;margin:12px 0;
+      border:1px dashed rgba(191,238,241,0.06);
+      white-space:pre-wrap;
+      word-break:break-word;
+      overflow-wrap:anywhere;
+    }
+    ul{margin:8px 0 12px 20px;color:#bcdfe8}
+    .actions{display:flex;gap:12px;margin-top:18px}
+    a.button{
+      display:inline-block;padding:10px 14px;background:#1f9989;color:#042226;border-radius:8px;text-decoration:none;font-weight:700
+    }
+    a.button:hover{background:#2bb09f}
+    a.link{color:#6fe0d0}
+    .muted{color:#9fbcc7;font-size:0.95rem}
+    /* Theme toggle button (top-right of card) */
+    .theme-toggle{position:absolute;top:14px;right:14px}
+    .theme-toggle button{background:transparent;border:1px solid rgba(255,255,255,0.06);color:inherit;padding:6px 8px;border-radius:8px;cursor:pointer;font-size:1rem}
+    .theme-toggle button:hover{background:rgba(255,255,255,0.02)}
+
+    /* Light theme overrides when body has class 'light' */
+    body.light{background:#f6f8fb;color:#0b2533}
+    body.light .card{background:linear-gradient(180deg,#ffffff 0%, #f1f6fb 100%);border:1px solid rgba(11,37,51,0.06);box-shadow:0 6px 20px rgba(9,30,45,0.06)}
+    body.light h1{color:#043047}
+    body.light p, body.light ul{color:#25414f}
+    body.light code{background:#f3f7fb;color:#063241;border:1px solid rgba(4,50,65,0.04)}
+    body.light .example{background:#f8fbff;border:1px dashed rgba(4,50,65,0.04)}
+    body.light a.button{background:#e6f7f3;color:#043233}
+    body.light a.button:hover{background:#d0f0ea}
+    body.light a.link{color:#0b7280}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div style="margin-bottom:10px">
+      <h1 style="font-size:1.9rem;margin:0 0 6px;color:#ffeccf">Buka Bilah Alamat dan edit URL Anda</h1>
+      <p style="margin:0 0 8px;color:#d6f3ee">Buka alamat di browser lalu ganti bagian grup dan nama mentee sesuai milik Anda.</p>
+      <div style="margin-top:8px">
+        <img src="https://raw.githubusercontent.com/krasyid822/Drive/548d7f24884f75c941b7b5d6c86b9c6a71ba3e6b/lv_0_20251130095609.gif" alt="contoh URL GIF" style="max-width:100%;border-radius:8px;border:1px solid rgba(255,255,255,0.04)" />
+      </div>
+    </div>
+    <h1>404/403</h1>
+    <p>Sepertinya alamat yang Anda buka tidak ditemukan atau ditolak. Ada beberapa kemungkinan:</p>
+    <ul>
+      <li>Anda salah ketik URL.</li>
+      <li>Alamat belum terdaftar untuk grup/mentee Anda.</li>
+      <li>Kode grup/mentee belum dibuat oleh pembuat webapp.</li>
+    </ul>
+
+    <p class="muted">Format URL yang benar untuk tiap mentee di web ini adalah:</p>
+    <div class="example"><code>https://amalanyaumiyah.xo.je/&lt;kode_nama_grup_mentoring&gt;/&lt;kode_nama_mentee&gt;</code></div>
+
+    <h2 style="margin-top:8px">Penjelasan singkat</h2>
+    <ul>
+      <li><strong><code>kode_nama_grup_mentoring</code></strong> dibuat berdasarkan nama grup saat folder tim dibuat. Kode ini bersifat tetap — jika grup mengganti nama, kode tidak berubah kecuali ada permintaan khusus untuk menggantinya. Kode biasanya merupakan singkatan dari nama grup (tanpa spasi dan karakter khusus).</li>
+      <li><strong><code>kode_nama_mentee</code></strong> dibuat berdasarkan nama panggilan (nickname) mentee atau user. Dibuat unik dan tidak mirip dengan pengguna lain.</li>
+    </ul>
+
+    <p>Contoh URL yang valid:</p>
+    <div class="example"><code>https://amalanyaumiyah.xo.je/abcdev/rasyid</code> atau <code>https://amalanyaumiyah.xo.je/mentor-team/andi</code></div>
+
+    <h2 style="margin-top:8px">Bagaimana jika alamat belum terdaftar?</h2>
+    <p>Jika Anda yakin URL sudah benar tetapi tetap tidak ditemukan, kemungkinan besar akun/grup Anda belum didaftarkan. Silakan meminta pendaftaran kepada pembuat webapp ini (pemilik/administrator).</p>
+    <p class="muted">Saat menghubungi pembuat webapp, sebutkan:</p>
+    <ul>
+      <li>Nama grup mentoring (untuk pembuatan <code>kode_nama_grup_mentoring</code>).</li>
+      <li>Nama panggilan Anda (untuk pembuatan <code>kode_nama_mentee</code>).</li>
+      <!-- <li>URL yang ingin Anda gunakan (jika Anda memiliki preferensi kode).</li> -->
+    </ul>
+
+    <p class="muted">Catatan: pembuat webapp akan membuat <em>kode</em> berdasarkan singkatan nama grup dan nickname; bila ingin mengganti kode di masa depan, harus meminta admin untuk memperbarui secara manual.</p>
+
+    <!-- <div class="actions">
+      <a class="button" href="/">Kembali ke Beranda</a>
+      <a class="link" href="/readme.md">Informasi & Kontak Pembuat</a>
+    </div> -->
+  </main>
+</body>
+</html>

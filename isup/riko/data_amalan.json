@@ -1,0 +1,64 @@
+{
+    "2025-08": {
+        "subuh": {
+            "12": "M"
+        },
+        "dzuhur": {
+            "12": ""
+        },
+        "ashar": {
+            "12": ""
+        },
+        "maghrib": {
+            "12": ""
+        },
+        "isya": {
+            "12": ""
+        },
+        "rawatib": {
+            "12": "1\/5"
+        },
+        "dhuha": {
+            "12": "✓"
+        },
+        "tahajud": {
+            "12": ""
+        },
+        "senin_kamis": {
+            "12": ""
+        },
+        "ayamul_bidh": {
+            "12": ""
+        },
+        "tilawah": {
+            "12": ""
+        },
+        "sedekah": {
+            "12": ""
+        },
+        "almatsurat_pagi": {
+            "12": "✓"
+        },
+        "almatsurat_petang": {
+            "12": ""
+        },
+        "istighfar": {
+            "12": ""
+        },
+        "rawatib_subuh_q": {
+            "12": "✓"
+        },
+        "rawatib_dzuhur_q": {
+            "12": ""
+        },
+        "rawatib_dzuhur_b": {
+            "12": ""
+        },
+        "rawatib_maghrib_b": {
+            "12": ""
+        },
+        "rawatib_isya_b": {
+            "12": ""
+        }
+    }
+}
