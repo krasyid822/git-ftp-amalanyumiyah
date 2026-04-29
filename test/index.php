@@ -48,7 +48,7 @@ if (isset($_POST['is_ajax'])) {
                 $tilawah_text .= ' ' . trim($_POST['tilawah_ayat_mulai']);
                 if(!empty($_POST['tilawah_ayat_selesai'])) $tilawah_text .= '-' . trim($_POST['tilawah_ayat_selesai']);
             }
-            $dataAmalan[$bulan]['tilawah'][$hari] = $tilawah_text;
+            $dataAmalan[$bulan]['tilawah'][$hari] = bi_normalize_tilawah_text($tilawah_text);
         } else {
             $dataAmalan[$bulan]['tilawah'][$hari] = '';
         }
@@ -160,11 +160,168 @@ $rawatib_details = [
 function bacaDataAmalan($file) {
     if (!file_exists($file)) file_put_contents($file, '{}');
     $dataJson = file_get_contents($file);
-    return json_decode($dataJson, true) ?: [];
+    $data = json_decode($dataJson, true);
+    if (!is_array($data)) {
+        return [];
+    }
+
+    if (bi_repair_tilawah_storage($data)) {
+        simpanDataAmalan($file, $data);
+    }
+
+    return $data;
 }
 
 function simpanDataAmalan($file, $data) {
     file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+function bi_normalize_quran_key(string $value): string
+{
+    $value = strtolower(trim($value));
+    $value = preg_replace('/^(surah|surat|qs)\s+/iu', '', $value) ?? $value;
+    $value = str_replace(['’', '`', '´'], "'", $value);
+    $value = preg_replace('/[^a-z0-9]+/', '', $value);
+
+    return is_string($value) ? $value : '';
+}
+
+function bi_load_quran_reference_map(): array
+{
+    static $cache = null;
+    if (is_array($cache)) {
+        return $cache;
+    }
+
+    $cache = [];
+    $csvFile = __DIR__ . '/dataset_halaman_quran.csv';
+    if (!is_file($csvFile)) {
+        return $cache;
+    }
+
+    $handle = fopen($csvFile, 'r');
+    if ($handle === false) {
+        return $cache;
+    }
+
+    fgetcsv($handle);
+    while (($row = fgetcsv($handle)) !== false) {
+        foreach ([$row[1] ?? '', $row[3] ?? ''] as $surahName) {
+            $surahName = trim((string) $surahName);
+            if ($surahName === '') {
+                continue;
+            }
+
+            $cache[bi_normalize_quran_key($surahName)] = $surahName;
+        }
+    }
+
+    fclose($handle);
+
+    return $cache;
+}
+
+function bi_match_quran_reference_name(string $name): string
+{
+    $name = trim(preg_replace('/\s+/u', ' ', $name) ?? $name);
+    if ($name === '') {
+        return '';
+    }
+
+    $reference = bi_load_quran_reference_map();
+    $normalizedKey = bi_normalize_quran_key($name);
+    if ($normalizedKey === '' || empty($reference)) {
+        return $name;
+    }
+
+    if (isset($reference[$normalizedKey])) {
+        return $reference[$normalizedKey];
+    }
+
+    $bestName = null;
+    $bestDistance = null;
+    foreach ($reference as $candidateKey => $candidateName) {
+        $distance = levenshtein($normalizedKey, $candidateKey);
+        if ($bestDistance === null || $distance < $bestDistance) {
+            $bestDistance = $distance;
+            $bestName = $candidateName;
+        }
+    }
+
+    $limit = max(1, (int) floor(strlen($normalizedKey) * 0.25));
+    return $bestName !== null && $bestDistance !== null && $bestDistance <= $limit ? $bestName : $name;
+}
+
+function bi_normalize_quran_surah_name(string $name): string
+{
+    $name = trim(preg_replace('/\s+/u', ' ', $name) ?? $name);
+    if ($name === '') {
+        return '';
+    }
+
+    return bi_match_quran_reference_name($name);
+}
+
+function bi_normalize_tilawah_text(string $text): string
+{
+    $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+    if ($text === '') {
+        return '';
+    }
+
+    $segments = preg_split('/\s*,\s*/u', $text);
+    if ($segments === false || $segments === []) {
+        $segments = [$text];
+    }
+
+    $normalizedSegments = [];
+    foreach ($segments as $segment) {
+        $segment = trim(preg_replace('/\s+/u', ' ', $segment) ?? $segment);
+        $segment = preg_replace('/\s*[:：]\s*/u', ' ', $segment) ?? $segment;
+        $segment = preg_replace('/\b(ayat|ayah)\b/iu', ' ', $segment) ?? $segment;
+        $segment = trim(preg_replace('/\s+/u', ' ', $segment) ?? $segment);
+        if ($segment === '') {
+            continue;
+        }
+
+        $surahPart = $segment;
+        $ayatSuffix = '';
+        if (preg_match('/^(.*?)(\s+\d.*)$/u', $segment, $match)) {
+            $surahPart = trim($match[1]);
+            $ayatSuffix = ' ' . trim($match[2]);
+        }
+
+        $normalizedSegments[] = bi_normalize_quran_surah_name($surahPart) . $ayatSuffix;
+    }
+
+    return implode(', ', $normalizedSegments);
+}
+
+function bi_repair_tilawah_storage(array &$data): bool
+{
+    $changed = false;
+
+    foreach ($data as $month => &$monthData) {
+        if (!is_array($monthData) || empty($monthData['tilawah']) || !is_array($monthData['tilawah'])) {
+            continue;
+        }
+
+        foreach ($monthData['tilawah'] as $day => $value) {
+            if (!is_string($value) || trim($value) === '') {
+                continue;
+            }
+
+            $normalizedValue = bi_normalize_tilawah_text($value);
+            if ($normalizedValue !== $value) {
+                $monthData['tilawah'][$day] = $normalizedValue;
+                $changed = true;
+            }
+        }
+    }
+
+    unset($monthData);
+
+    return $changed;
 }
 
 // Fungsi untuk memberikan kelas warna pada sel tabel
@@ -244,7 +401,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['is_ajax'])) {
                  $tilawah_text .= '-' . trim($_POST['tilawah_ayat_selesai']);
             }
         }
-        $dataAmalan[$bulan]['tilawah'][$hari] = $tilawah_text;
+        $dataAmalan[$bulan]['tilawah'][$hari] = bi_normalize_tilawah_text($tilawah_text);
     } else {
         $dataAmalan[$bulan]['tilawah'][$hari] = '';
     }
