@@ -81,7 +81,76 @@ if (isset($_POST['is_ajax'])) {
     // --- B. AJAX UNTUK MENGAMBIL INFO AYYAMUL BIDH ---
     if ($_POST['is_ajax'] === 'get_ayyamul_bidh' && isset($_POST['tanggal'])) {
         $selectedDate = new DateTime($_POST['tanggal']);
-        $response = getAyyamulBidhInfoFromClass($selectedDate);
+        $dataAmalan = bacaDataAmalan($dataFile);
+        $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
+        $response = getAyyamulBidhInfoFromClass($selectedDate, $adj);
+    }
+
+    // --- D. AJAX UNTUK MENYIMPAN KALIBRASI HIJRIYAH ---
+    if ($_POST['is_ajax'] === 'save_calibration' && isset($_POST['adjustment'])) {
+        $adjustment = (int)$_POST['adjustment'];
+        $dataAmalan = bacaDataAmalan($dataFile);
+        if (!is_array($dataAmalan)) {
+            $dataAmalan = [];
+        }
+        $dataAmalan['config']['hijri_adjustment'] = $adjustment;
+        simpanDataAmalan($dataFile, $dataAmalan);
+        
+        $tanggal = $_POST['tanggal'] ?? date('Y-m-d');
+        $response = [
+            'status' => 'success',
+            'message' => "Kalibrasi kalender Hijriyah berhasil diperbarui!",
+            'updated_data' => bacaDataAmalan($dataFile),
+            'ayyamul_bidh_info' => getAyyamulBidhInfoFromClass(new DateTime($tanggal), $adjustment)
+        ];
+        echo json_encode($response);
+        exit;
+    }
+
+    // --- C. AJAX UNTUK MENYIMPAN SATU SEL TERTENTU ---
+    if ($_POST['is_ajax'] === 'save_single_cell' && isset($_POST['tanggal']) && isset($_POST['key'])) {
+        $tanggal = $_POST['tanggal'];
+        $bulan = date('Y-m', strtotime($tanggal));
+        $hari = (int)date('d', strtotime($tanggal));
+        $key = $_POST['key'];
+        $value = $_POST['value'] ?? '';
+
+        $dataAmalan = bacaDataAmalan($dataFile);
+
+        // Daftar key detail rawatib
+        $rawatib_details_keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+
+        if ($key === 'rawatib') {
+            // Jika payload adalah rawatib (summary), maka value berupa JSON dari detail rawatib yang dipilih
+            $details = json_decode($value, true);
+            $rawatib_done = 0;
+            foreach ($rawatib_details_keys as $rkey) {
+                if (!empty($details[$rkey])) {
+                    $rawatib_done++;
+                    $dataAmalan[$bulan][$rkey][$hari] = '✓';
+                } else {
+                    $dataAmalan[$bulan][$rkey][$hari] = '';
+                }
+            }
+            $dataAmalan[$bulan]['rawatib'][$hari] = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+        } elseif ($key === 'tilawah') {
+            $dataAmalan[$bulan]['tilawah'][$hari] = bi_normalize_tilawah_text($value);
+        } else {
+            if ($key === 'istighfar') {
+                $istighfar_val = (int)$value;
+                $dataAmalan[$bulan]['istighfar'][$hari] = $istighfar_val > 0 ? $istighfar_val : '';
+            } else {
+                $dataAmalan[$bulan][$key][$hari] = $value;
+            }
+        }
+
+        simpanDataAmalan($dataFile, $dataAmalan);
+
+        $response = [
+            'status' => 'success',
+            'message' => "Data berhasil diperbarui!",
+            'updated_data' => bacaDataAmalan($dataFile)
+        ];
     }
 
     echo json_encode($response);
@@ -90,18 +159,23 @@ if (isset($_POST['is_ajax'])) {
 
 
 // --- FUNGSI BARU UNTUK MENGGUNAKAN CLASS PERHITUNGAN ---
-function getAyyamulBidhInfoFromClass($date = null) {
+function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
+    $calculator->setAdjustment($adjustment);
     
     // Gunakan tanggal yang diberikan atau tanggal hari ini jika null
     $currentDate = $date ?? new DateTime();
     $bidhData = $calculator->getAyyamulBidhDates($currentDate);
     
     $jadwal_puasa_final = [];
+    $raw_dates = [];
     if (empty($bidhData['error']) && !empty($bidhData['dates'])) {
         foreach ($bidhData['dates'] as $dateInfo) {
             $jadwal_puasa_final[] = $dateInfo['formatted'];
+            if ($dateInfo['gregorian'] instanceof DateTime) {
+                $raw_dates[] = $dateInfo['gregorian']->format('Y-m-d');
+            }
         }
     } else if (!empty($bidhData['error'])) {
          $jadwal_puasa_final = [$bidhData['error']];
@@ -113,12 +187,41 @@ function getAyyamulBidhInfoFromClass($date = null) {
         'hadith'      => 'Dari Abu Dzar, Rasulullah shallallahu ‘alaihi wa sallam bersabda padanya, “Jika engkau ingin berpuasa tiga hari setiap bulannya, maka berpuasalah pada tanggal 13, 14, dan 15 (dari bulan Hijriyah).” (HR. Tirmidzi dan An Nasa’i)',
         'dates_title' => 'Perkiraan Jadwal Bulan Ini (' . ($bidhData['current_hijri_month'] ?? '') . ' ' . ($bidhData['current_hijri_year'] ?? '') . '):',
         'dates'       => $jadwal_puasa_final,
+        'raw_dates'   => $raw_dates,
         'disclaimer'  => 'Perhitungan ini menggunakan algoritma internal dan akurasinya bisa berbeda satu hari, tergantung metode penentuan awal bulan (rukyat/hisab) di wilayah Anda.'
     ];
 }
 
+// --- FUNGSI PEMBANTU UNTUK CEK HARI PUASA SUNNAH ---
+function bi_is_senin_kamis($dateStr) {
+    $dayOfWeek = date('N', strtotime($dateStr)); // 1 for Monday, 4 for Thursday
+    return ($dayOfWeek == 1 || $dayOfWeek == 4);
+}
+
+function bi_is_ayyamul_bidh($dateStr) {
+    global $dataFile;
+    require_once __DIR__ . '/AyamulBidhCalc.php';
+    $calculator = new AyyamulBidhCalculator();
+    
+    $dataAmalan = bacaDataAmalan($dataFile);
+    $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
+    $calculator->setAdjustment($adj);
+    
+    $date = new DateTime($dateStr);
+    $hijri = $calculator->gregorianToHijri($date);
+    
+    // Pastikan bukan bulan Dzulhijjah (12)
+    if ($hijri['month'] == 12) {
+        return false;
+    }
+    
+    return ($hijri['day'] == 13 || $hijri['day'] == 14 || $hijri['day'] == 15);
+}
+
 // Panggil fungsi untuk mendapatkan data dinamis SAAT HALAMAN PERTAMA KALI DIMUAT
-$ayyamul_bidh_info = getAyyamulBidhInfoFromClass();
+$dataAmalanInit = bacaDataAmalan($dataFile);
+$adjInit = $dataAmalanInit['config']['hijri_adjustment'] ?? 0;
+$ayyamul_bidh_info = getAyyamulBidhInfoFromClass(null, $adjInit);
 
 
 // --- STRUKTUR DATA AMALAN ---
@@ -432,6 +535,7 @@ $bulan_sekarang = date('Y-m');
 $semuaDataAmalan = bacaDataAmalan($dataFile);
 $dataBulanIni = $semuaDataAmalan[$bulan_sekarang] ?? [];
 $jumlah_hari = date('t');
+$displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
 
 ?>
 <!DOCTYPE html>
@@ -607,8 +711,8 @@ if (isset($manifestPath)) {
         /* --- CONTAINER & LAYOUT --- */
         .container {
             /* max-width: 1300px; */
-            margin: 30px auto;
-            padding: 20px 32px;
+            margin: 10px auto;
+            padding: 0px 32px;
             position: relative;
             z-index: 1;
         }
@@ -1299,101 +1403,115 @@ if (isset($manifestPath)) {
             background: linear-gradient(180deg, #8A6AAE 0%, #775A9D 100%);
         }
         .download-actions {
-            text-align: center;
             display: flex;
-            justify-content: center;
+            justify-content: space-between;
             align-items: center;
             flex-wrap: wrap;
             gap: 12px;
             margin-top: 20px;
         }
+        .legend-shortcut-btn {
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+        }
+        .legend-shortcut-btn:hover {
+            background-color: var(--md-sys-color-primary) !important;
+            color: #FFFFFF !important;
+            box-shadow: var(--md-sys-elevation-level1);
+            transform: translateY(-1px);
+        }
+        .legend-shortcut-btn:active {
+            transform: translateY(0);
+        }
         
-        /* --- FLOATING SAVE BUTTON (Material You Scrim & Surface) --- */
+        /* --- FLOATING SAVE BUTTON (Modern Premium Compact Capsule) --- */
         .floating-save-container {
             position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            background: #4CAF50;
-            padding: 20px 0;
-            box-shadow: 0 -3px 10px rgba(0, 0, 0, 0.3);
+            bottom: 24px;
+            left: 50%;
+            transform: translate(-50%, 120px);
+            background: rgba(18, 28, 28, 0.85); /* Slate transparent */
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            padding: 8px 16px;
+            box-shadow: 0 10px 30px -10px rgba(0, 106, 106, 0.5), 0 4px 12px rgba(0, 0, 0, 0.15);
             z-index: 1000;
-            transform: translateY(150%);
-            transition: transform 0.3s ease;
-            border-top: 2px solid #388E3C;
-            border-bottom: none;
+            border-radius: 50px; /* Pill/Capsule shape */
+            border: 1px solid rgba(0, 106, 106, 0.35);
+            transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+            opacity: 0;
+            pointer-events: none;
+            width: auto;
+            max-width: 90%;
         }
         
-        /* Floating save di atas (ketika submit button di bawah scroll) */
-        .floating-save-container.position-top {
-            bottom: auto;
-            top: 0;
-            transform: translateY(-150%);
-            border-top: none;
-            border-bottom: 2px solid #388E3C;
-            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.3);
-        }
-        
-
-        
-
         .floating-save-container .container {
-            margin: 0 auto;
-            padding-top: 0;
-            padding-bottom: 0;
             display: flex;
             align-items: center;
-            justify-content: space-between;
-            gap: 20px;
-            position: relative;
-            z-index: 1;
+            justify-content: center;
+            gap: 12px;
+            padding: 0;
+            margin: 0;
+            width: 100%;
         }
+        
         .floating-save-container p {
             margin: 0;
             font-weight: 700;
-            font-size: 1.125rem;
+            font-size: 0.875rem;
             color: #ffffff;
-            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
-            position: relative;
-            z-index: 1;
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 8px;
+            white-space: nowrap;
         }
+        
+        @keyframes warningPulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.15); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+        
         .floating-save-container p i {
-            font-size: 1.5rem;
-            animation: shake 0.5s ease-in-out infinite;
+            font-size: 1rem;
+            color: #FFB300;
+            animation: warningPulse 1.5s ease-in-out infinite;
         }
         
-
+        /* Floating submit button style */
+        .floating-save-container .submit-btn {
+            padding: 6px 14px;
+            font-size: 0.8rem;
+            font-weight: 700;
+            border-radius: 20px;
+            text-transform: none;
+            background: linear-gradient(135deg, #00BFA5 0%, #00796B 100%);
+            color: white;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 2px 8px rgba(0, 191, 165, 0.3);
+            transition: all 0.2s ease;
+        }
         
-        /* Gunakan style submit-btn yang sama untuk floating dan original */
+        .floating-save-container .submit-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(0, 191, 165, 0.5);
+            background: linear-gradient(135deg, #00E5FF 0%, #0097A7 100%);
+        }
+        
         body.show-floating-save .floating-save-container {
-            transform: translateY(0);
-        }
-        
-        body.show-floating-save .floating-save-container.position-top {
-            transform: translateY(0);
+            transform: translate(-50%, 0);
+            opacity: 1;
+            pointer-events: auto;
         }
         
         body.show-floating-save .original-submit-wrapper {
-            opacity: 0;
-            visibility: hidden;
+            opacity: 0.5; /* Fade out original slightly but keep layout intact */
         }
         
         /* Submit button visibility */
         body.submit-visible .original-submit-wrapper {
             opacity: 1 !important;
             visibility: visible !important;
-        }
-        
-        /* Hide floating save when original submit is visible (fallback) */
-        body.submit-visible .floating-save-container:not(.position-top) {
-            transform: translateY(150%) !important;
-        }
-        
-        body.submit-visible .floating-save-container.position-top {
-            transform: translateY(-150%) !important;
         }
         
         /* --- MODAL FOR AYYAMUL BIDH INFO (Material You Dialog) --- */
@@ -1563,7 +1681,7 @@ if (isset($manifestPath)) {
             background: #FAFAFA;
             padding: 32px;
             border-radius: 12px;
-            margin-top: 40px;
+            margin-top: 10px;
             box-shadow: 0 3px 8px rgba(0, 0, 0, 0.15);
             border: 1px solid #d0d0d0;
             position: relative;
@@ -1579,7 +1697,6 @@ if (isset($manifestPath)) {
             border-collapse: collapse;
             margin-top: 20px;
             border-radius: var(--md-sys-shape-corner-medium);
-            overflow: hidden;
         }
         th, td { 
             border: 1px solid var(--md-sys-color-outline-variant);
@@ -2059,21 +2176,19 @@ if (isset($manifestPath)) {
             }
             
             .floating-save-container .container {
-                flex-direction: column;
-                gap: 12px;
-                padding: 0 16px;
+                flex-direction: row;
+                gap: 10px;
+                padding: 0;
             }
             
             .floating-save-container p {
-                font-size: 1rem;
-                text-align: center;
+                font-size: 0.75rem;
             }
             
             .floating-save-container .submit-btn {
-                width: 100%;
-                min-width: auto;
-                padding: 16px 24px;
-                font-size: 0.9375rem;
+                width: auto;
+                padding: 5px 12px;
+                font-size: 0.725rem;
             }
             
             #penjelasan-fitur {
@@ -2190,17 +2305,435 @@ if (isset($manifestPath)) {
             }
             
             .floating-save-container .container {
-                padding: 0 10px;
+                padding: 0;
             }
             
             .floating-save-container p {
-                font-size: 0.9375rem;
+                font-size: 0.725rem;
             }
             
             .floating-save-container .submit-btn {
-                padding: 14px 20px;
-                font-size: 0.875rem;
+                padding: 4px 10px;
+                font-size: 0.7rem;
             }
+        }
+
+        /* --- EDITABLE TABLE CELLS & POPUP INLINE EDITOR --- */
+        .editable-cell {
+            cursor: pointer;
+            position: relative;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            user-select: none;
+        }
+        .editable-cell:hover {
+            outline: 2px solid var(--md-sys-color-primary);
+            outline-offset: -2px;
+            box-shadow: var(--md-sys-elevation-level2);
+            transform: scale(1.08);
+            z-index: 5;
+            border-radius: 4px;
+        }
+        
+        /* Animasi kilatan sukses setelah menyimpan */
+        @keyframes cellSaveSuccess {
+            0% { box-shadow: 0 0 0 0px rgba(76, 175, 80, 0.7); filter: brightness(1.2); }
+            50% { box-shadow: 0 0 0 10px rgba(76, 175, 80, 0); filter: brightness(1.3); }
+            100% { box-shadow: 0 0 0 0px rgba(76, 175, 80, 0); filter: brightness(1); }
+        }
+        .cell-save-success {
+            animation: cellSaveSuccess 0.8s cubic-bezier(0.2, 0, 0, 1);
+        }
+
+        /* Gaya sel terkunci (pengaman) */
+        .status-locked {
+            background-color: var(--md-sys-color-surface-container-highest) !important;
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 8px, rgba(0, 0, 0, 0.04) 8px, rgba(0, 0, 0, 0.04) 16px) !important;
+            color: var(--md-sys-color-outline) !important;
+            cursor: pointer !important; /* Diubah menjadi pointer agar intuitif untuk diklik */
+            opacity: 0.55;
+            transition: all 0.2s ease;
+        }
+        .status-locked:hover {
+            opacity: 0.85;
+            filter: brightness(0.95);
+        }
+        .status-locked::after {
+            content: '🔒';
+            font-size: 0.7rem;
+            vertical-align: middle;
+            opacity: 0.4;
+            display: inline-block;
+            margin-left: 2px;
+        }
+
+        /* Kolom hari ini (today highlight) */
+        .today-column {
+            position: relative;
+        }
+        /* Tint overlay pada sel data hari ini */
+        tbody td.today-column::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-color: var(--md-sys-color-primary-container);
+            opacity: 0.25;
+            pointer-events: none;
+            z-index: 0;
+        }
+        thead .today-column {
+            background-color: var(--md-sys-color-primary) !important;
+            color: var(--md-sys-color-on-primary) !important;
+            font-weight: 700;
+            box-shadow: inset 0 3px 0 0 var(--md-sys-color-tertiary);
+        }
+        /* Garis batas kiri-kanan kolom hari ini */
+        tbody td.today-column {
+            border-left: 1.5px solid var(--md-sys-color-primary) !important;
+            border-right: 1.5px solid var(--md-sys-color-primary) !important;
+        }
+        tbody td.today-column.status-empty {
+            background-color: var(--md-sys-color-primary-container) !important;
+            opacity: 0.65;
+        }
+
+        /* Navigasi Bulan di heading tabel */
+        .month-navigator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 4px;
+        }
+        .month-navigator h2 {
+            margin: 0;
+            font-size: 1.15rem;
+        }
+        .month-nav-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 1.5px solid var(--md-sys-color-outline-variant);
+            background: var(--md-sys-color-surface-container);
+            color: var(--md-sys-color-primary);
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            padding: 0;
+        }
+        .month-nav-btn:hover {
+            background: var(--md-sys-color-primary);
+            color: var(--md-sys-color-on-primary);
+            border-color: var(--md-sys-color-primary);
+            box-shadow: var(--md-sys-elevation-level2);
+            transform: scale(1.08);
+        }
+        .month-nav-btn:active {
+            transform: scale(0.95);
+        }
+
+        /* Mini Confirm Popover untuk Quick Toggle */
+        .mini-confirm-popover {
+            position: absolute;
+            background: var(--md-sys-color-surface-container-lowest);
+            border: 1px solid var(--md-sys-color-outline-variant);
+            border-radius: var(--md-sys-shape-corner-medium);
+            box-shadow: var(--md-sys-elevation-level3);
+            padding: 10px 14px;
+            z-index: 1001;
+            animation: popoverFadeIn 0.15s cubic-bezier(0.2, 0, 0, 1);
+            min-width: 160px;
+            text-align: center;
+        }
+        .mini-confirm-popover p {
+            margin: 0 0 10px 0;
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--md-sys-color-on-surface);
+        }
+        .mini-confirm-actions {
+            display: flex;
+            gap: 8px;
+            justify-content: center;
+        }
+        .mini-confirm-actions button {
+            flex: 1;
+            padding: 7px 10px;
+            border-radius: 6px;
+            border: none;
+            font-size: 0.78rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.15s ease;
+        }
+        .mini-confirm-yes {
+            background: var(--md-sys-color-primary);
+            color: var(--md-sys-color-on-primary);
+        }
+        .mini-confirm-yes:hover {
+            background: var(--color-primary-dark);
+        }
+        .mini-confirm-no {
+            background: var(--md-sys-color-surface-container-high);
+            color: var(--md-sys-color-on-surface);
+        }
+        .mini-confirm-no:hover {
+            background: var(--md-sys-color-surface-container-highest);
+        }
+
+        /* Popover Inline Editor Container */
+        .table-popover {
+            position: absolute;
+            background: #FFFFFF;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            border-radius: var(--md-sys-shape-corner-medium);
+            box-shadow: var(--md-sys-elevation-level3);
+            padding: 14px;
+            z-index: 1000;
+            min-width: 240px;
+            max-width: 320px;
+            animation: popoverFadeIn 0.2s cubic-bezier(0.2, 0, 0, 1);
+            color: var(--md-sys-color-on-surface);
+        }
+        @keyframes popoverFadeIn {
+            from { opacity: 0; transform: scale(0.95) translateY(5px); }
+            to { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        .popover-header {
+            font-weight: 700;
+            font-size: 0.875rem;
+            margin-bottom: 12px;
+            color: var(--md-sys-color-primary);
+            border-bottom: 1px solid var(--md-sys-color-outline-variant);
+            padding-bottom: 6px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .popover-title {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .popover-close {
+            cursor: pointer;
+            background: none;
+            border: none;
+            font-size: 1.25rem;
+            color: var(--md-sys-color-on-surface-variant);
+            padding: 0 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            width: 24px;
+            height: 24px;
+            transition: background 0.2s;
+        }
+        .popover-close:hover {
+            background-color: var(--md-sys-color-surface-variant);
+        }
+        .popover-body {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        /* Sholat Wajib Grid di Popover */
+        .popover-sholat-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 4px;
+        }
+        .popover-option-btn {
+            padding: 8px 4px;
+            border-radius: 4px;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            background: #FFF;
+            font-size: 0.75rem;
+            font-weight: 700;
+            cursor: pointer;
+            text-align: center;
+            transition: all 0.15s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+        .popover-option-btn:hover {
+            background: var(--md-sys-color-surface-container);
+            border-color: var(--md-sys-color-outline);
+        }
+        .popover-option-btn.active {
+            background: var(--md-sys-color-primary);
+            color: #FFF;
+            border-color: var(--md-sys-color-primary);
+        }
+        
+        /* Form elements & buttons di Popover */
+        .popover-input {
+            width: 100%;
+            padding: 8px 10px;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            border-radius: 4px;
+            font-size: 0.875rem;
+            box-sizing: border-box;
+        }
+        .popover-input:focus {
+            outline: none;
+            border-color: var(--md-sys-color-primary);
+        }
+        .popover-save-btn {
+            width: 100%;
+            padding: 10px;
+            background: var(--md-sys-color-primary);
+            color: #FFF;
+            border: none;
+            border-radius: 4px;
+            font-weight: 700;
+            cursor: pointer;
+            font-size: 0.875rem;
+            transition: background 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .popover-save-btn:hover {
+            background: var(--color-primary-dark);
+        }
+        
+        /* Grid untuk Qadha di Popover */
+        .popover-qadha-fields {
+            display: grid;
+            grid-template-columns: 1.2fr 0.8fr;
+            gap: 6px;
+            margin-top: 4px;
+        }
+
+        /* --- STICKY COLUMNS FOR TABLE --- */
+        /* Header Sticky positioning */
+        .table-wrapper thead tr:first-child th:first-child {
+            position: sticky;
+            left: 0;
+            z-index: 12;
+            background: linear-gradient(180deg, #E8E8E8 0%, #D0D0D0 100%) !important;
+            min-width: 40px;
+            max-width: 40px;
+            width: 40px;
+            box-shadow: 1px 0 0 var(--md-sys-color-outline-variant);
+        }
+        .table-wrapper thead tr:first-child th.th-ibadah {
+            position: sticky;
+            left: 40px;
+            z-index: 12;
+            background: linear-gradient(180deg, #E8E8E8 0%, #D0D0D0 100%) !important;
+            min-width: 270px;
+            max-width: 270px;
+            width: 270px;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.08);
+        }
+
+        /* Body Sticky positioning */
+        /* Column 1: NO */
+        .table-wrapper td.kategori-utama:not(.td-ibadah) {
+            position: sticky;
+            left: 0;
+            z-index: 10;
+            background-color: var(--md-sys-color-surface-container-high) !important;
+            min-width: 40px;
+            max-width: 40px;
+            width: 40px;
+            box-shadow: 1px 0 0 var(--md-sys-color-outline-variant);
+        }
+        /* Column 2: KATEGORI */
+        .table-wrapper td.kategori-utama.td-ibadah {
+            position: sticky;
+            left: 40px;
+            z-index: 10;
+            background-color: var(--md-sys-color-surface-container-high) !important;
+            min-width: 120px;
+            max-width: 120px;
+            width: 120px;
+            box-shadow: 1px 0 0 var(--md-sys-color-outline-variant);
+        }
+        /* Column 3: IBADAH */
+        .table-wrapper td.td-ibadah:not(.kategori-utama) {
+            position: sticky;
+            left: 160px;
+            z-index: 10;
+            background-color: #FFFFFF !important;
+            min-width: 150px;
+            max-width: 150px;
+            width: 150px;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.08); /* Beri shadow halus di sebelah kanan agar terlihat terpisah saat digeser */
+        }
+        
+        /* Hover effect for row sticky cells */
+        tr:hover td.kategori-utama {
+            background-color: var(--md-sys-color-surface-container-highest) !important;
+        }
+        tr:hover td.td-ibadah:not(.kategori-utama) {
+            background-color: var(--md-sys-color-surface-container-low) !important;
+        }
+
+        /* Nonaktifkan sticky kiri, tapi kunci kolom hari ini di kanan pada mobile portrait */
+        @media (max-width: 768px) and (orientation: portrait) {
+            .table-wrapper thead tr:first-child th:first-child,
+            .table-wrapper thead tr:first-child th.th-ibadah,
+            .table-wrapper td.kategori-utama:not(.td-ibadah),
+            .table-wrapper td.kategori-utama.td-ibadah,
+            .table-wrapper td.td-ibadah:not(.kategori-utama) {
+                position: static !important;
+                left: auto !important;
+                box-shadow: none !important;
+                z-index: auto !important;
+            }
+
+            /* Kunci kolom hari ini di kanan layar saat digeser ke kiri */
+            .table-wrapper th.today-column,
+            .table-wrapper td.today-column {
+                position: sticky !important;
+                right: 0 !important;
+                z-index: 15 !important;
+                box-shadow: -3px 0 6px rgba(0, 0, 0, 0.16) !important;
+            }
+            
+            /* Warna solid untuk header hari ini */
+            .table-wrapper th.today-column {
+                background: linear-gradient(180deg, var(--md-sys-color-primary) 0%, var(--color-primary-dark) 100%) !important;
+                color: var(--md-sys-color-on-primary) !important;
+            }
+
+            /* Hindari efek transparan/bleeding pada sel data hari ini saat digeser */
+            .table-wrapper td.today-column {
+                opacity: 1 !important;
+            }
+            .table-wrapper td.today-column.status-empty {
+                background-color: #E6F2F2 !important; /* solid primary-container equivalent */
+            }
+            .table-wrapper td.today-column.status-locked {
+                background-color: #E4EBEA !important; /* solid surface-container-high/highest equivalent */
+            }
+        }
+
+        /* Berikan kenyamanan jarak atas karena header dihilangkan */
+        .container {
+            padding-top: 0px !important;
+        }
+
+        /* Style for Hijri Calibration Details */
+        .hijri-calibration-details summary::-webkit-details-marker {
+            display: none;
+        }
+        .hijri-calibration-details[open] .details-chevron {
+            transform: rotate(180deg);
+        }
+        .hijri-calibration-details summary:hover {
+            color: var(--color-primary-dark);
         }
 
     </style>
@@ -2211,201 +2744,56 @@ if (isset($manifestPath)) {
 <div id="toast-notification"></div>
 
 <div class="container">
-    <header class="main-header">
-        <h1>Tracker Amalan Yaumiyah</h1>
-        <p>Catat dan pantau ibadah harianmu untuk menjadi lebih istiqomah.</p>
-        
-        <?php
-// Tentukan nama yang akan ditampilkan.
-// Jika $namaPengguna ada (dari subfolder), gunakan itu. Jika tidak, gunakan nama default.
-$displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
-?>
-<div class="nama-pengguna"><?= htmlspecialchars($displayName) ?></div>
-    </header>
+    <!-- Hidden form for saving data (fully deprecated visible layout elements to maximize screen space) -->
+    <form id="form-amalan" style="display: none;" action="" method="POST">
+        <input type="hidden" name="is_ajax" value="save_data">
+        <input type="hidden" id="tanggal" name="tanggal" value="<?= date('Y-m-d') ?>">
+        <input type="hidden" name="daftar_amalan_structure" value='<?= htmlspecialchars(json_encode($daftar_amalan)) ?>'>
+        <input type="hidden" name="rawatib_details_structure" value='<?= htmlspecialchars(json_encode($rawatib_details)) ?>'>
 
-    <div id="reminder-container"></div>
+        <!-- SHOLAT WAJIB hidden inputs -->
+        <?php foreach ($daftar_amalan['SHOLAT WAJIB'] as $key => $label): ?>
+            <input type="hidden" name="<?= $key ?>" id="input-<?= $key ?>" value="">
+        <?php endforeach; ?>
 
-    <div class="form-container">
-        <h2><i class="fa-solid fa-pen-to-square"></i> Input & Edit Amalan Harian</h2>
-        
-        <?php if ($pesan_sukses): ?>
-            <div class="pesan pesan-sukses"><?= htmlspecialchars($pesan_sukses) ?></div>
-        <?php endif; ?>
+        <!-- SHOLAT SUNNAH hidden inputs -->
+        <?php foreach ($rawatib_details as $key => $label): ?>
+            <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
+        <?php endforeach; ?>
+        <?php foreach (['dhuha', 'tahajud'] as $key): ?>
+            <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
+        <?php endforeach; ?>
 
-        <form id="form-amalan" action="" method="POST">
-             <input type="hidden" name="is_ajax" value="save_data">
-             <input type="hidden" name="daftar_amalan_structure" value='<?= htmlspecialchars(json_encode($daftar_amalan)) ?>'>
-             <input type="hidden" name="rawatib_details_structure" value='<?= htmlspecialchars(json_encode($rawatib_details)) ?>'>
+        <!-- TILAWAH hidden inputs -->
+        <input type="text" id="tilawah_surat" name="tilawah_surat">
+        <input type="text" id="tilawah_ayat_mulai" name="tilawah_ayat_mulai">
+        <input type="text" id="tilawah_ayat_selesai" name="tilawah_ayat_selesai">
 
-            <div class="form-group">
-                <label for="tanggal">Pilih Tanggal:</label>
-                <input type="date" id="tanggal" name="tanggal" value="<?= date('Y-m-d') ?>" required>
-            </div>
-            
-            <nav class="quick-nav">
-                <a href="#form-sholat-wajib" class="nav-button"><i class="fa-solid fa-mosque"></i> Sholat Wajib</a>
-                <a href="#form-sholat-sunnah" class="nav-button"><i class="fa-solid fa-hands-praying"></i> Sholat Sunnah</a>
-                <a href="#form-tilawah" class="nav-button"><i class="fa-solid fa-book-quran"></i> Tilawah</a>
-                <a href="#form-istighfar" class="nav-button"><i class="fa-solid fa-person-praying"></i> Istighfar</a>
-                <a href="#form-puasa" class="nav-button"><i class="fa-solid fa-moon"></i> Puasa Sunnah</a>
-                <a href="#form-sedekah" class="nav-button"><i class="fa-solid fa-hand-holding-dollar"></i> Sedekah</a>
-                <a href="#form-almatsurat" class="nav-button"><i class="fa-solid fa-shield-halved"></i> Al-Ma'tsurat</a>
-            </nav>
+        <!-- ISTIGHFAR hidden input -->
+        <input type="number" id="istighfar" name="istighfar" value="0">
 
-            <fieldset id="form-sholat-wajib">
-                <legend><i class="fa-solid fa-mosque"></i>Sholat Wajib <?= generate_shortcut_link('SHOLAT WAJIB') ?></legend>
-              <div class="prayer-inputs-container">
-    <?php foreach($daftar_amalan['SHOLAT WAJIB'] as $key => $label): ?>
-    <div class="prayer-input-group prayer-time-<?= $key ?>">
-        <label><?= $label ?></label>
-        
-        <!-- Slider Container (Vertical Layout) -->
-        <div class="prayer-slider-wrapper">
-            <input type="range" 
-                   id="slider-<?= $key ?>" 
-                   class="prayer-slider" 
-                   data-key="<?= $key ?>"
-                   min="0" 
-                   max="5" 
-                   value="0" 
-                   step="1">
-            <div class="slider-labels">
-                <span data-value="0" class="slider-label active">--</span>
-                <span data-value="1" class="slider-label">M</span>
-                <span data-value="2" class="slider-label">R-J</span>
-                <span data-value="3" class="slider-label">M-S</span>
-                <span data-value="4" class="slider-label">R</span>
-                <span data-value="5" class="slider-label">Q</span>
-            </div>
-            <div class="slider-indicator" id="indicator-<?= $key ?>">
-                <i class="fa-solid fa-circle-question status-icon"></i> 
-                <span>Belum Diisi</span>
-            </div>
-        </div>
-        
-        <input type="hidden" name="<?= $key ?>" id="input-<?= $key ?>" value="">
-        
-        <!-- Qadha Details (hanya muncul saat slider di posisi Q) -->
-        <div class="qadha-details-wrapper" id="qadha-details-<?= $key ?>" style="display: none; margin-top: 12px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
-            <input type="date" class="qadha-date-input" data-key="<?= $key ?>" aria-label="Tanggal Qadha <?= $label ?>">
-            <input type="time" class="qadha-time-input" data-key="<?= $key ?>" aria-label="Waktu Qadha <?= $label ?>">
-        </div>
+        <!-- PUASA SUNNAH hidden inputs -->
+        <?php foreach ($daftar_amalan['PUASA SUNNAH'] as $key => $label): ?>
+            <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
+        <?php endforeach; ?>
 
-    </div>
-    <?php endforeach; ?>
-</div>
-            </fieldset>
+        <!-- SEDEKAH hidden inputs -->
+        <input type="checkbox" id="sedekah" name="sedekah" value="✓" data-details-wrapper="sedekah_details_wrapper">
+        <input type="text" name="sedekah_detail" id="sedekah_detail">
 
-            <fieldset id="form-sholat-sunnah">
-                <legend><i class="fa-solid fa-hands-praying"></i>Sholat Sunnah</legend>
-                <label>Rawatib Mu'akkad</label>
-                <div class="rawatib-grid">
-                    <?php foreach($rawatib_details as $key => $label): ?>
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>">
-                        <label for="<?= $key ?>"><?= $label ?></label>
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-                <hr style="margin: 20px 0; border-color: var(--color-border);">
-                <div class="form-group-columns">
-                    <?php foreach(['dhuha', 'tahajud'] as $key): ?>
-                    <div class="form-group checkbox-group">
-                        <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
-                        <label for="<?= $key ?>"><?= $daftar_amalan['SHOLAT SUNNAH'][$key] ?></label>
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-            </fieldset>
-            
-            <fieldset id="form-tilawah">
-                <legend><i class="fa-solid fa-book-quran"></i>Tilawah Quran</legend>
-                <div class="tilawah-grid">
-                   <input type="text" id="tilawah_surat" name="tilawah_surat" placeholder="Nama Surat">
-                   <input type="text" id="tilawah_ayat_mulai" name="tilawah_ayat_mulai" placeholder="Ayat Ke">
-                   <input type="text" id="tilawah_ayat_selesai" name="tilawah_ayat_selesai" placeholder="Sampai Ke">
-                </div>
-            </fieldset>
-
-            <fieldset id="form-istighfar">
-                <legend><i class="fa-solid fa-person-praying"></i>Istighfar <?= generate_shortcut_link('ISTIGHFAR') ?></legend>
-                <input type="number" id="istighfar" name="istighfar" min="0" max="200" placeholder="Jumlah" style="display:none;">
-                <div class="istighfar-group">
-                    <input type="range" id="istighfar_slider" min="0" max="200" step="10" value="0">
-                    <div class="istighfar-labels">
-                        <span class="istighfar-label active" data-value="0">0</span>
-                        <span class="istighfar-label" data-value="20">20</span>
-                        <span class="istighfar-label" data-value="50">50</span>
-                        <span class="istighfar-label" data-value="100">100</span>
-                        <span class="istighfar-label" data-value="150">150</span>
-                        <span class="istighfar-label" data-value="200">200</span>
-                    </div>
-                    <span id="istighfar_value">0</span>
-                </div>
-            </fieldset>
-            
-            <fieldset id="form-puasa">
-                <legend><i class="fa-solid fa-moon"></i>Puasa Sunnah</legend>
-                <div class="form-group-columns">
-                    <?php foreach($daftar_amalan['PUASA SUNNAH'] as $key => $label): ?>
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
-                            <label for="<?= $key ?>"><?= $label ?></label>
-                            <?php if($key === 'ayamul_bidh'): ?>
-                                <button type="button" class="info-btn" id="ayamul_bidh_info_btn"><i class="fa-solid fa-circle-info"></i></button>
-                            <?php endif; ?>
-                        </div>
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-            </fieldset>
-            
-            <fieldset id="form-sedekah">
-                <legend><i class="fa-solid fa-hand-holding-dollar"></i>Sedekah</legend>
-                <div class="form-group">
-                    <div class="checkbox-group">
-                        <input type="checkbox" id="sedekah" name="sedekah" value="✓" data-details-wrapper="sedekah_details_wrapper">
-                        <label for="sedekah">Sedekah</label>
-                    </div>
-                    <div class="optional-input-wrapper" id="sedekah_details_wrapper" style="display: none;">
-                        <input type="text" name="sedekah_detail" id="sedekah_detail" placeholder="Opsional: Tulis jenis sedekah (cth: Uang, Nasi kotak)">
-                    </div>
-                </div>
-            </fieldset>
-            
-            <fieldset id="form-almatsurat">
-                <legend><i class="fa-solid fa-shield-halved"></i>Al-Ma'tsurat <?= generate_shortcut_link('ALMATSURAT') ?></legend>
-                <div class="form-group-columns">
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="almatsurat_pagi" name="almatsurat_pagi" value="✓" data-details-wrapper="almatsurat_pagi_details_wrapper">
-                            <label for="almatsurat_pagi">Al-Ma'tsurat Pagi</label>
-                        </div>
-                        <div class="optional-input-wrapper" id="almatsurat_pagi_details_wrapper" style="display: none;">
-                            <input type="text" name="almatsurat_pagi_detail" id="almatsurat_pagi_detail" placeholder="Opsional: sampai bagian mana">
-                        </div>
-                    </div>
-                    <div class="form-group">
-                        <div class="checkbox-group">
-                            <input type="checkbox" id="almatsurat_petang" name="almatsurat_petang" value="✓" data-details-wrapper="almatsurat_petang_details_wrapper">
-                            <label for="almatsurat_petang">Al-Ma'tsurat Petang</label>
-                        </div>
-                        <div class="optional-input-wrapper" id="almatsurat_petang_details_wrapper" style="display: none;">
-                            <input type="text" name="almatsurat_petang_detail" id="almatsurat_petang_detail" placeholder="Opsional: sampai bagian mana">
-                        </div>
-                    </div>
-                </div>
-            </fieldset>
-
-            <div class="original-submit-wrapper">
-                 <button type="submit" class="submit-btn">Simpan Data</button>
-            </div>
-        </form>
-    </div>
+        <!-- ALMATSURAT hidden inputs -->
+        <input type="checkbox" id="almatsurat_pagi" name="almatsurat_pagi" value="✓" data-details-wrapper="almatsurat_pagi_details_wrapper">
+        <input type="text" name="almatsurat_pagi_detail" id="almatsurat_pagi_detail">
+        <input type="checkbox" id="almatsurat_petang" name="almatsurat_petang" value="✓" data-details-wrapper="almatsurat_petang_details_wrapper">
+        <input type="text" name="almatsurat_petang_detail" id="almatsurat_petang_detail">
+    </form>
 
     <div class="table-container">
-        <h2>Laporan Bulan: <?= date('F Y') ?></h2>
+        <div class="month-navigator">
+            <button type="button" class="month-nav-btn" id="month-prev-btn" title="Bulan Sebelumnya"><i class="fa-solid fa-chevron-left"></i></button>
+            <h2>Laporan Bulan: <?= date('F Y') ?></h2>
+            <button type="button" class="month-nav-btn" id="month-next-btn" title="Bulan Berikutnya"><i class="fa-solid fa-chevron-right"></i></button>
+        </div>
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -2415,7 +2803,7 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
                         <th colspan="<?= $jumlah_hari ?>">TANGGAL</th>
                     </tr>
                     <tr>
-                        <?php for ($i = 1; $i <= $jumlah_hari; $i++): ?><th><?= $i ?></th><?php endfor; ?>
+                        <?php $hari_ini = (int)date('j'); for ($i = 1; $i <= $jumlah_hari; $i++): ?><th<?= ($i === $hari_ini) ? ' class="today-column"' : '' ?>><?= $i ?></th><?php endfor; ?>
                     </tr>
                 </thead>
                 <tbody>
@@ -2439,29 +2827,46 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
                         
                         <?php for ($i = 1; $i <= $jumlah_hari; $i++): 
                             $value = $dataBulanIni[$key][$i] ?? '';
-                            if($key == 'istighfar') {
-                                if ($value >= 200) $display_val = '✓✓';
-                                elseif ($value >= 100) $display_val = '✓';
-                                else $display_val = '';
-                            } else {
-                                $display_val = htmlspecialchars($value);
-                                if (strpos($display_val, '✓ (') === 0) {
-                                    $display_val = str_replace(['✓ (', ')'], ['✓<br><small>(', ')</small>'], $display_val);
+                            
+                            // Pengaman sel puasa sunnah
+                            $is_locked = false;
+                            if ($key === 'senin_kamis' || $key === 'ayamul_bidh') {
+                                $dateStr = $bulan_sekarang . '-' . sprintf('%02d', $i);
+                                if ($key === 'senin_kamis' && !bi_is_senin_kamis($dateStr)) {
+                                    $is_locked = true;
+                                } elseif ($key === 'ayamul_bidh' && !bi_is_ayyamul_bidh($dateStr)) {
+                                    $is_locked = true;
                                 }
-                                // BARU: Tambahkan kondisi untuk format Qadha yang detail
-    elseif (strpos($value, 'Q (') === 0) {
-        // Ambil hanya bagian waktu (HH:MM) jika pattern tanggal+waktu ditemukan
-        if (preg_match('/Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)/', $value, $m)) {
-            $display_val = 'Q ' . htmlspecialchars($m[1]);
-        } else {
-            // Fallback: hapus kurung dan tampilkan sisanya
-            $detail = trim(str_replace(['Q (', ')'], '', $value));
-            $display_val = 'Q ' . htmlspecialchars($detail);
-        }
-    }
                             }
+                            
+                            if ($is_locked) {
+                                $colorClass = 'status-locked';
+                                $display_val = '';
+                            } else {
+                                $colorClass = getCellColorClass($key, $value);
+                                if($key == 'istighfar') {
+                                    if ($value >= 200) $display_val = '✓✓';
+                                    elseif ($value >= 100) $display_val = '✓';
+                                    else $display_val = '';
+                                } else {
+                                    $display_val = htmlspecialchars($value);
+                                    if (strpos($display_val, '✓ (') === 0) {
+                                        $display_val = str_replace(['✓ (', ')'], ['✓<br><small>(', ')</small>'], $display_val);
+                                    }
+                                    elseif (strpos($value, 'Q (') === 0) {
+                                        if (preg_match('/Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)/', $value, $m)) {
+                                            $display_val = 'Q ' . htmlspecialchars($m[1]);
+                                        } else {
+                                            $detail = trim(str_replace(['Q (', ')'], '', $value));
+                                            $display_val = 'Q ' . htmlspecialchars($detail);
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            $editableClass = $is_locked ? '' : 'editable-cell';
                         ?>
-                            <td class="<?= getCellColorClass($key, $value) ?>"><?= $display_val ?></td>
+                            <td class="<?= $editableClass ?> <?= $colorClass ?><?= ($i === $hari_ini) ? ' today-column' : '' ?>" data-key="<?= $key ?>" data-day="<?= $i ?>"><?= $display_val ?></td>
                         <?php endfor; ?>
                     </tr>
                     <?php 
@@ -2473,49 +2878,41 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
                 </tbody>
             </table>
         </div>
-           <div class="download-actions">
-               <a href="download.php" class="download-btn"><i class="fa-solid fa-file-lines"></i> Download Laporan (.txt)</a>
-               <button type="button" id="download-pdf-btn" class="download-btn pdf-btn"><i class="fa-solid fa-file-pdf"></i> Download Tabel (.pdf)</button>
+        
+        <!-- Table Legend & Shortcut Bar -->
+        <div class="table-legend-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); flex-wrap: wrap; gap: 12px;">
+            <div class="table-legend-items" style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; font-weight: 600; color: var(--md-sys-color-on-surface-variant);">
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-good); display: inline-block; border: 1px solid var(--color-good-text);"></span> Masjid / Terbaik</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-2); display: inline-block; border: 1px solid var(--color-ok-2-text);"></span> Terlaksana Baik</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-1); display: inline-block; border: 1px solid var(--color-ok-1-text);"></span> Rumah / Sendiri</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-qadha); display: inline-block; border: 1px solid var(--color-qadha-text);"></span> Qadha</span>
+            </div>
+            
+            <a href="https://refleksiformentee.xo.je/" target="_blank" rel="noopener noreferrer" class="legend-shortcut-btn" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 0.8rem; font-weight: 700; color: var(--md-sys-color-primary); background-color: var(--md-sys-color-primary-container); padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(0, 106, 106, 0.2);" title="Buka platform refleksi mentee">
+                <i class="fa-solid fa-arrow-up-right-from-square"></i> Web Refleksi Mentee
+            </a>
         </div>
-    </div>
-    
-    <div id="penjelasan-fitur">
-        <div class="feature-card">
-            <h3><i class="fa-solid fa-palette"></i> Laporan Berwarna</h3>
-            <ul>
-                <li style="color:var(--color-good-text)"><strong>Hijau:</strong> Amalan tuntas atau dalam kondisi terbaik (misal: Sholat di Masjid berjamaah).</li>
-                <li style="color:var(--color-ok-2-text)"><strong>Biru:</strong> Amalan terlaksana dengan baik (misal: Rawatib sebagian, Istighfar > 100).</li>
-                <li style="color:var(--color-ok-1-text)"><strong>Kuning:</strong> Amalan terlaksana namun tidak dalam kondisi ideal (misal: Sholat di rumah sendiri ).</li>
-                <li style="color:var(--color-qadha-text)"><strong>Merah:</strong> Menandakan Qadha.</li>
-            </ul>
+
+        <div class="download-actions">
+            <div class="nama-pengguna" style="margin-top: 0;"><?= htmlspecialchars($displayName) ?></div>
+            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+                <a href="download.php" class="download-btn" style="margin-top: 0;"><i class="fa-solid fa-file-lines"></i> Download Laporan (.txt)</a>
+                <button type="button" id="download-pdf-btn" class="download-btn pdf-btn" style="margin-top: 0;"><i class="fa-solid fa-file-pdf"></i> Download Tabel (.pdf)</button>
+            </div>
         </div>
-        <!-- <div class="feature-card">
-            <h3><i class="fa-solid fa-hand-pointer"></i> Input Cepat & Praktis</h3>
-            <ul>
-                <li><strong>Sholat - Slider Vertikal:</strong> Geser untuk memilih status sholat (Masjid, Rumah, Qadha, dll). Tap 2× pada indikator untuk cycle status berikutnya.</li>
-                <li><strong>Istighfar - Double-Tap:</strong> Tap 2× cepat pada angka istighfar untuk berpindah ke nilai berikutnya (0→20→50→100→150→200→0). Lihat badge "👆2×" di pojok kanan atas.</li>
-                <li><strong>Klik/Tap Label:</strong> Klik atau tap langsung pada label untuk melompat ke status/nilai tersebut dengan cepat.</li>
-            </ul>
-        </div> -->
-        <a href="https://refleksiformentee.xo.je/" target="_blank" rel="noopener noreferrer" style="text-decoration: none; color: inherit;">
-    <div class="feature-card">
-        <h3><i class="fa-solid fa-arrow-up-right-from-square"></i> Buka Web Refleksi Mentee</h3>
-        <p>Buka dan isi platform refleksi untuk mentee di tab baru untuk evaluasi yang lebih baik.</p>
-    </div>
-</a>
     </div>
 
 </div>
 
 <div class="floating-save-container" id="floating-save-area">
     <div class="container">
-        <p><i class="fa-solid fa-triangle-exclamation"></i> Ada perubahan yang belum disimpan.</p>
-        <button type="submit" form="form-amalan" class="submit-btn">Simpan Perubahan</button>
+        <p><i class="fa-solid fa-triangle-exclamation"></i> Ada perubahan</p>
+        <button type="submit" form="form-amalan" class="submit-btn">Simpan</button>
     </div>
 </div>
 
 <div class="modal-overlay" id="ayamul_bidh_modal">
-    <div class="modal-content">
+    <div class="modal-content" style="max-height: 90vh; overflow-y: auto;">
         <button type="button" class="modal-close-btn">&times;</button>
         <h3 id="modal_title"></h3>
         <p id="modal_hadith"></p>
@@ -2523,6 +2920,33 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
         <h4 id="modal_dates_title"></h4>
         <ul id="modal_dates_list"></ul>
         <p class="disclaimer" id="modal_disclaimer"></p>
+        
+        <!-- Kalibrasi Kalender Hijriyah (Collapsed by Default) -->
+        <details style="margin-top: 20px; border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: 16px;" class="hijri-calibration-details">
+            <summary style="font-weight: 700; font-size: 0.875rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; color: var(--md-sys-color-primary); list-style: none; user-select: none; outline: none;">
+                <span style="display: flex; align-items: center; gap: 8px;">
+                    <i class="fa-solid fa-gears"></i> Kalibrasi Tanggal Hijriyah
+                </span>
+                <span class="details-chevron" style="transition: transform 0.2s ease;"><i class="fa-solid fa-chevron-down" style="font-size: 0.75rem;"></i></span>
+            </summary>
+            <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                    <select id="hijri-adjustment-select" style="padding: 8px 12px; font-size: 0.875rem; border-radius: 4px; border: 1px solid var(--md-sys-color-outline-variant); background: #fff; width: auto; box-shadow: none; display: inline-block;">
+                        <option value="-2">-2 Hari</option>
+                        <option value="-1">-1 Hari</option>
+                        <option value="0" selected>0 Hari (Default)</option>
+                        <option value="1">+1 Hari</option>
+                        <option value="2">+2 Hari</option>
+                    </select>
+                    <button type="button" id="save-calibration-btn" class="popover-save-btn" style="margin-top: 0; padding: 8px 16px; font-size: 0.85rem; width: auto; display: inline-flex; align-items: center; gap: 8px; height: 38px;">
+                        <i class="fa-solid fa-floppy-disk"></i> Terapkan
+                    </button>
+                </div>
+                <small style="font-size: 0.725rem; color: var(--md-sys-color-on-surface-variant); display: block; line-height: 1.3;">
+                    Gunakan fitur ini untuk mencocokkan awal bulan Hijriyah jika jadwal Ayyamul Bidh berbeda 1 atau 2 hari dengan ketetapan kalender lokal Anda.
+                </small>
+            </div>
+        </details>
     </div>
 </div>
 
@@ -2530,6 +2954,12 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     let semuaDataAmalan = <?= json_encode($semuaDataAmalan); ?>;
+    
+    function isSeninKamisJS(dateStr) {
+        const d = new Date(dateStr + 'T00:00:00');
+        const day = d.getDay(); // 1 for Monday, 4 for Thursday
+        return (day === 1 || day === 4);
+    }
     const daftarAmalanStructure = <?= json_encode($daftar_amalan); ?>;
     const form = document.getElementById('form-amalan');
     const tanggalInput = document.getElementById('tanggal');
@@ -2691,6 +3121,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.status === 'success') {
                 showToast(data.message, 'success');
                 semuaDataAmalan = data.updated_data; // Update data global
+                updateFormForDate._skipScroll = true; // Hindari pergeseran tabel setelah menyimpan data
                 updateFormForDate(tanggalInput.value); // Memuat ulang form dan tabel
                 
                 // Reset initialFormState setelah berhasil disimpan
@@ -2739,53 +3170,15 @@ document.addEventListener('DOMContentLoaded', function() {
     window.checkForChanges = function() {
         if (getCurrentFormState() !== initialFormState) {
             document.body.classList.add('show-floating-save');
-            updateFloatingPosition(); // Update posisi floating berdasarkan submit button
+            const activeDate = tanggalInput.value;
+            const textEl = document.querySelector('#floating-save-area p');
+            if (textEl) {
+                textEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: #FFB300; animation: warningPulse 1.5s ease-in-out infinite;"></i> Ada perubahan pada tanggal ${activeDate}`;
+            }
         } else {
             document.body.classList.remove('show-floating-save');
         }
     }
-    
-    // --- FUNGSI UNTUK MENENTUKAN POSISI FLOATING SAVE ---
-    function updateFloatingPosition() {
-        const originalSubmitWrapper = document.querySelector('.original-submit-wrapper');
-        const floatingContainer = document.getElementById('floating-save-area');
-        
-        if (!originalSubmitWrapper || !floatingContainer) return;
-        
-        // Dapatkan posisi submit button relatif terhadap viewport
-        const rect = originalSubmitWrapper.getBoundingClientRect();
-        const viewportHeight = window.innerHeight;
-        const submitButtonCenter = rect.top + (rect.height / 2);
-        
-        // Floating muncul di sisi yang SAMA dengan submit button
-        // Jika submit button ada di bawah tengah viewport, floating juga di bawah
-        // Jika submit button ada di atas tengah viewport, floating juga di atas
-        if (submitButtonCenter > viewportHeight / 2) {
-            // Submit button di bawah, floating juga di bawah (default)
-            floatingContainer.classList.remove('position-top');
-            document.body.classList.add('floating-was-bottom');
-            document.body.classList.remove('floating-was-top');
-        } else {
-            // Submit button di atas, floating juga di atas
-            floatingContainer.classList.add('position-top');
-            document.body.classList.add('floating-was-top');
-            document.body.classList.remove('floating-was-bottom');
-        }
-    }
-    
-    // Update posisi saat window resize atau scroll
-    let updatePositionTimeout;
-    function schedulePositionUpdate() {
-        clearTimeout(updatePositionTimeout);
-        updatePositionTimeout = setTimeout(() => {
-            if (document.body.classList.contains('show-floating-save')) {
-                updateFloatingPosition();
-            }
-        }, 100);
-    }
-    
-    window.addEventListener('resize', schedulePositionUpdate);
-    window.addEventListener('scroll', schedulePositionUpdate);
     
     // --- PREVENT PAGE REFRESH IF THERE ARE UNSAVED CHANGES ---
     window.addEventListener('beforeunload', function(e) {
@@ -2798,34 +3191,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // --- INTERSECTION OBSERVER FOR SUBMIT BUTTON VISIBILITY ---
-    // Deteksi ketika tombol submit original terlihat di viewport
-    const originalSubmitWrapper = document.querySelector('.original-submit-wrapper');
-    
-    if (originalSubmitWrapper) {
-        const observerOptions = {
-            root: null, // viewport
-            threshold: 0.1, // 10% dari element terlihat
-            rootMargin: '0px 0px -50px 0px' // margin bawah untuk memicu lebih awal
-        };
-        
-        const submitButtonObserver = new IntersectionObserver((entries) => {
-            entries.forEach(entry => {
-                if (entry.isIntersecting) {
-                    // Tombol submit original terlihat - trigger animasi dramatis
-                    // Tambah class dengan delay untuk trigger animation
-                    requestAnimationFrame(() => {
-                        document.body.classList.add('submit-visible');
-                    });
-                } else {
-                    // Tombol submit original tidak terlihat - tampilkan floating button jika ada perubahan
-                    document.body.classList.remove('submit-visible');
-                }
-            });
-        }, observerOptions);
-        
-        submitButtonObserver.observe(originalSubmitWrapper);
-    }
+    // --- INTERSECTION OBSERVER REMOVED ---
     
     // --- OPTIONAL DETAILS INPUT LOGIC ---
     document.querySelectorAll('input[type="checkbox"][data-details-wrapper]').forEach(checkbox => {
@@ -2842,16 +3208,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
     // --- AYYAMUL BIDH MODAL LOGIC ---
     const modal = document.getElementById('ayamul_bidh_modal');
-    const openModalBtn = document.getElementById('ayamul_bidh_info_btn');
     const closeModalBtn = modal.querySelector('.modal-close-btn');
+    const adjustmentSelect = document.getElementById('hijri-adjustment-select');
+    const saveCalibrationBtn = document.getElementById('save-calibration-btn');
 
-    openModalBtn.addEventListener('click', () => {
+    window.openAyyamulBidhModal = function() {
         document.getElementById('modal_title').textContent = ayyamulBidhInfo.title;
         document.getElementById('modal_desc').textContent = ayyamulBidhInfo.description;
         document.getElementById('modal_hadith').textContent = ayyamulBidhInfo.hadith;
         document.getElementById('modal_dates_title').textContent = ayyamulBidhInfo.dates_title;
         document.getElementById('modal_disclaimer').textContent = ayyamulBidhInfo.disclaimer;
         
+        // Set adjustment dropdown value
+        if (adjustmentSelect && semuaDataAmalan.config) {
+            adjustmentSelect.value = semuaDataAmalan.config.hijri_adjustment !== undefined ? semuaDataAmalan.config.hijri_adjustment : 0;
+        } else if (adjustmentSelect) {
+            adjustmentSelect.value = 0;
+        }
+
         const list = document.getElementById('modal_dates_list');
         list.innerHTML = '';
         if (ayyamulBidhInfo.dates && ayyamulBidhInfo.dates.length > 0) {
@@ -2866,7 +3240,59 @@ document.addEventListener('DOMContentLoaded', function() {
             list.appendChild(li);
         }
         modal.classList.add('active');
-    });
+    };
+
+    if (saveCalibrationBtn) {
+        saveCalibrationBtn.addEventListener('click', function() {
+            const selectVal = document.getElementById('hijri-adjustment-select').value;
+            const originalText = this.innerHTML;
+            this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>...';
+            this.disabled = true;
+            
+            const formData = new FormData();
+            formData.append('is_ajax', 'save_calibration');
+            formData.append('adjustment', selectVal);
+            formData.append('tanggal', tanggalInput.value);
+            
+            fetch('', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showToast(data.message, 'success');
+                    semuaDataAmalan = data.updated_data;
+                    ayyamulBidhInfo = data.ayyamul_bidh_info;
+                    
+                    // Rebuild dates list in modal
+                    const list = document.getElementById('modal_dates_list');
+                    list.innerHTML = '';
+                    if (ayyamulBidhInfo.dates && ayyamulBidhInfo.dates.length > 0) {
+                        ayyamulBidhInfo.dates.forEach(dateStr => {
+                            const li = document.createElement('li');
+                            li.textContent = dateStr;
+                            list.appendChild(li);
+                        });
+                    }
+                    
+                    // Refresh table and checkboxes
+                    updateFormForDate(tanggalInput.value);
+                } else {
+                    showToast('Gagal memperbarui kalibrasi.', 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Gagal terhubung ke server.', 'error');
+                console.error(err);
+            })
+            .finally(() => {
+                this.innerHTML = originalText;
+                this.disabled = false;
+            });
+        });
+    }
+
     const closeModal = () => modal.classList.remove('active');
     closeModalBtn.addEventListener('click', closeModal);
     modal.addEventListener('click', (e) => {
@@ -2907,41 +3333,50 @@ document.addEventListener('DOMContentLoaded', function() {
     const istighfarLabels = document.querySelectorAll('.istighfar-label');
     
     function updateIstighfarLabel(value) {
-        istighfarLabels.forEach(label => {
-            const labelValue = parseInt(label.dataset.value);
-            label.classList.toggle('active', labelValue === parseInt(value));
+        if (istighfarLabels) {
+            istighfarLabels.forEach(label => {
+                const labelValue = parseInt(label.dataset.value);
+                label.classList.toggle('active', labelValue === parseInt(value));
+            });
+        }
+    }
+    
+    if (istighfarSlider) {
+        istighfarSlider.addEventListener('input', () => {
+            const value = istighfarSlider.value;
+            if (istighfarInput) istighfarInput.value = value;
+            if (istighfarValueDisplay) istighfarValueDisplay.textContent = value;
+            updateIstighfarLabel(value);
         });
     }
     
-    istighfarSlider.addEventListener('input', () => {
-        const value = istighfarSlider.value;
-        istighfarInput.value = value;
-        istighfarValueDisplay.textContent = value;
-        updateIstighfarLabel(value);
-    });
-    
     // Label click handler
-    istighfarLabels.forEach(label => {
-        label.addEventListener('click', () => {
-            const value = label.dataset.value;
-            istighfarSlider.value = value;
-            istighfarInput.value = value;
-            istighfarValueDisplay.textContent = value;
-            updateIstighfarLabel(value);
-            if (typeof window.checkForChanges === 'function') {
-                window.checkForChanges();
-            }
+    if (istighfarLabels) {
+        istighfarLabels.forEach(label => {
+            label.addEventListener('click', () => {
+                const value = label.dataset.value;
+                if (istighfarSlider) istighfarSlider.value = value;
+                if (istighfarInput) istighfarInput.value = value;
+                if (istighfarValueDisplay) istighfarValueDisplay.textContent = value;
+                updateIstighfarLabel(value);
+                if (typeof window.checkForChanges === 'function') {
+                    window.checkForChanges();
+                }
+            });
         });
-    });
+    }
     
     // Double-click/Double-tap on istighfar value display to cycle
-    istighfarValueDisplay.title = 'Klik/Tap 2x untuk menambah nilai';
+    if (istighfarValueDisplay) {
+        istighfarValueDisplay.title = 'Klik/Tap 2x untuk menambah nilai';
+    }
     let lastIstighfarTap = 0;
     const istighfarDoubleTapDelay = 300; // milliseconds
     const istighfarSteps = [0, 20, 50, 100, 150, 200]; // Nilai-nilai yang bisa dicycle
     
     function cycleIstighfarValue() {
-        const currentValue = parseInt(istighfarSlider.value);
+        if (!istighfarSlider || !istighfarValueDisplay) return;
+        const currentValue = parseInt(istighfarSlider.value) || 0;
         // Cari index nilai saat ini dalam array steps
         let currentIndex = istighfarSteps.findIndex(step => step >= currentValue);
         if (currentIndex === -1) currentIndex = istighfarSteps.length - 1;
@@ -2951,7 +3386,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const nextValue = istighfarSteps[nextIndex];
         
         istighfarSlider.value = nextValue;
-        istighfarInput.value = nextValue;
+        if (istighfarInput) istighfarInput.value = nextValue;
         istighfarValueDisplay.textContent = nextValue;
         updateIstighfarLabel(nextValue);
         
@@ -2967,26 +3402,28 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     // Desktop: Double-click event
-    istighfarValueDisplay.addEventListener('dblclick', function(e) {
-        e.preventDefault();
-        cycleIstighfarValue();
-    });
-    
-    // Mobile: Touch event untuk double-tap
-    istighfarValueDisplay.addEventListener('touchend', function(e) {
-        const currentTime = new Date().getTime();
-        const tapLength = currentTime - lastIstighfarTap;
-        
-        if (tapLength < istighfarDoubleTapDelay && tapLength > 0) {
-            // Double tap detected
+    if (istighfarValueDisplay) {
+        istighfarValueDisplay.addEventListener('dblclick', function(e) {
             e.preventDefault();
             cycleIstighfarValue();
-            lastIstighfarTap = 0; // Reset
-        } else {
-            // Single tap
-            lastIstighfarTap = currentTime;
-        }
-    });
+        });
+        
+        // Mobile: Touch event untuk double-tap
+        istighfarValueDisplay.addEventListener('touchend', function(e) {
+            const currentTime = new Date().getTime();
+            const tapLength = currentTime - lastIstighfarTap;
+            
+            if (tapLength < istighfarDoubleTapDelay && tapLength > 0) {
+                // Double tap detected
+                e.preventDefault();
+                cycleIstighfarValue();
+                lastIstighfarTap = 0; // Reset
+            } else {
+                // Single tap
+                lastIstighfarTap = currentTime;
+            }
+        });
+    }
 
     // --- MAIN FORM UPDATE & TABLE REBUILD FUNCTION ---
     function scrollReportToSelectedDate(selectedDay) {
@@ -3011,8 +3448,8 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateFormForDate(tanggalStr) {
         form.reset(); 
         
-        istighfarSlider.value = 0;
-        istighfarValueDisplay.textContent = '0';
+        if (istighfarSlider) istighfarSlider.value = 0;
+        if (istighfarValueDisplay) istighfarValueDisplay.textContent = '0';
         updateIstighfarLabel(0);
         prayerKeys.forEach(key => window.setPrayerSliderState(key, ''));
         document.querySelectorAll('.optional-input-wrapper').forEach(w => w.style.display = 'none');
@@ -3050,8 +3487,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     } else if (amalanKey === 'istighfar') {
                         const val = nilai || 0; 
                         element.value = val;
-                        istighfarSlider.value = val;
-                        istighfarValueDisplay.textContent = val;
+                        if (istighfarSlider) istighfarSlider.value = val;
+                        if (istighfarValueDisplay) istighfarValueDisplay.textContent = val;
                         updateIstighfarLabel(val);
                     } else if (element.tagName !== 'BUTTON') {
                             element.value = nilai; 
@@ -3066,6 +3503,58 @@ document.addEventListener('DOMContentLoaded', function() {
                     element.checked = (dataBulanIni[key]?.[hari] === '✓');
                 }
             });
+
+            // Lock/Unlock puasa sunnah checkboxes based on date
+            const seninKamisCb = document.getElementById('senin_kamis');
+            const ayamulBidhCb = document.getElementById('ayamul_bidh');
+            
+            if (seninKamisCb && seninKamisCb.offsetParent !== null) {
+                const isSK = isSeninKamisJS(tanggalStr);
+                seninKamisCb.disabled = !isSK;
+                if (!isSK) {
+                    seninKamisCb.checked = false;
+                }
+                let hint = seninKamisCb.parentNode.querySelector('.puasa-hint');
+                if (!hint) {
+                    hint = document.createElement('small');
+                    hint.className = 'puasa-hint';
+                    hint.style.marginLeft = '8px';
+                    hint.style.fontSize = '0.75rem';
+                    hint.style.fontWeight = '700';
+                    seninKamisCb.parentNode.appendChild(hint);
+                }
+                if (isSK) {
+                    hint.textContent = ' (Hari Puasa)';
+                    hint.style.color = 'var(--color-success)';
+                } else {
+                    hint.textContent = ' (Hanya Senin/Kamis)';
+                    hint.style.color = 'var(--md-sys-color-error)';
+                }
+            }
+            
+            if (ayamulBidhCb && ayamulBidhCb.offsetParent !== null) {
+                const isAB = ayyamulBidhInfo && ayyamulBidhInfo.raw_dates && ayyamulBidhInfo.raw_dates.includes(tanggalStr);
+                ayamulBidhCb.disabled = !isAB;
+                if (!isAB) {
+                    ayamulBidhCb.checked = false;
+                }
+                let hint = ayamulBidhCb.parentNode.querySelector('.puasa-hint');
+                if (!hint) {
+                    hint = document.createElement('small');
+                    hint.className = 'puasa-hint';
+                    hint.style.marginLeft = '8px';
+                    hint.style.fontSize = '0.75rem';
+                    hint.style.fontWeight = '700';
+                    ayamulBidhCb.parentNode.appendChild(hint);
+                }
+                if (isAB) {
+                    hint.textContent = ' (Hari Puasa Ayyamul Bidh)';
+                    hint.style.color = 'var(--color-success)';
+                } else {
+                    hint.textContent = ' (Hanya tgl 13, 14, 15 Hijriyah)';
+                    hint.style.color = 'var(--md-sys-color-error)';
+                }
+            }
 
             const tilawahValue = dataBulanIni.tilawah?.[hari] || '';
             if (tilawahValue) {
@@ -3086,7 +3575,8 @@ document.addEventListener('DOMContentLoaded', function() {
             const monthName = new Date(year, monthIndex, 1).toLocaleString('id-ID', { month: 'long', year: 'numeric' });
 
             const tableContainer = document.querySelector('.table-container');
-            tableContainer.querySelector('h2').textContent = `Laporan Bulan: ${monthName}`;
+            const h2El = tableContainer.querySelector('.month-navigator h2') || tableContainer.querySelector('h2');
+            h2El.textContent = `Laporan Bulan: ${monthName}`;
             
             const downloadBtn = tableContainer.querySelector('.download-btn');
             if (downloadBtn) {
@@ -3101,8 +3591,16 @@ document.addEventListener('DOMContentLoaded', function() {
             const tbody = table.querySelector('tbody');
 
             // Rebuild header
+            const todayObj = new Date();
+            const todayDay = todayObj.getDate();
+            const todayMonth = todayObj.getMonth(); // 0-indexed
+            const todayYear = todayObj.getFullYear();
+            const isCurrentMonth = (year === todayYear && monthIndex === todayMonth);
             let headerHtml = `<tr><th rowspan="2">NO</th><th rowspan="2" colspan="2" class="th-ibadah">IBADAH</th><th colspan="${daysInMonth}">TANGGAL</th></tr><tr>`;
-            for (let i = 1; i <= daysInMonth; i++) { headerHtml += `<th>${i}</th>`; }
+            for (let i = 1; i <= daysInMonth; i++) {
+                const isTodayCol = isCurrentMonth && i === todayDay;
+                headerHtml += `<th${isTodayCol ? ' class="today-column"' : ''}>${i}</th>`;
+            }
             headerHtml += `</tr>`;
             thead.innerHTML = headerHtml;
 
@@ -3123,33 +3621,57 @@ document.addEventListener('DOMContentLoaded', function() {
                 bodyHtml += `<td class="td-ibadah">${label}</td>`;
                 for (let i = 1; i <= daysInMonth; i++) {
                     const value = dataBulanIni[key]?.[i] ?? '';
-                    const colorClass = getCellColorClassJS(key, value);
-                    let displayVal = value.toString().replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                    const dayStr = String(i).padStart(2, '0');
+                    const cellDate = `${bulan}-${dayStr}`;
+                    
+                    let isLocked = false;
+                    if (key === 'senin_kamis') {
+                        isLocked = !isSeninKamisJS(cellDate);
+                    } else if (key === 'ayamul_bidh') {
+                        isLocked = !ayyamulBidhInfo || !ayyamulBidhInfo.raw_dates || !ayyamulBidhInfo.raw_dates.includes(cellDate);
+                    }
+                    
+                    let colorClass, displayVal;
+                    if (isLocked) {
+                        colorClass = 'status-locked';
+                        displayVal = '';
+                    } else {
+                        colorClass = getCellColorClassJS(key, value);
+                        displayVal = value.toString().replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-                    if (key === 'istighfar') {
-                         if (value >= 200) displayVal = '✓✓';
-                         else if (value >= 100) displayVal = '✓';
-                         else displayVal = '';
-                    } else if (displayVal.startsWith('✓ (')) {
-                        displayVal = displayVal.replace('✓ (', '✓<br><small>(').replace(')', ')</small>');
-                    } else if (displayVal.startsWith('Q (')) {
-                        // Extract time only (HH:MM) from pattern like: Q (YYYY-MM-DD HH:MM)
-                        const qmatch = displayVal.match(/^Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)$/);
-                        if (qmatch) {
-                            displayVal = 'Q ' + qmatch[1];
-                        } else {
-                            // Fallback: remove parentheses and keep the inner text
-                            displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                        if (key === 'istighfar') {
+                             if (value >= 200) displayVal = '✓✓';
+                             else if (value >= 100) displayVal = '✓';
+                             else displayVal = '';
+                        } else if (displayVal.startsWith('✓ (')) {
+                            displayVal = displayVal.replace('✓ (', '✓<br><small>(').replace(')', ')</small>');
+                        } else if (displayVal.startsWith('Q (')) {
+                            const qmatch = displayVal.match(/^Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)$/);
+                            if (qmatch) {
+                                displayVal = 'Q ' + qmatch[1];
+                            } else {
+                                displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                            }
                         }
                     }
-                    bodyHtml += `<td class="${colorClass}">${displayVal}</td>`;
+                    
+                    const editableClass = isLocked ? '' : 'editable-cell';
+                    const isTodayCell = isCurrentMonth && i === todayDay;
+                    bodyHtml += `<td class="${editableClass} ${colorClass}${isTodayCell ? ' today-column' : ''}" data-key="${key}" data-day="${i}">${displayVal}</td>`;
                 }
                 bodyHtml += `</tr>`;
                 isFirstRow = false;
             }
         }
         tbody.innerHTML = bodyHtml;
-        scrollReportToSelectedDate(hari);
+        // Hanya scroll otomatis jika BUKAN dipanggil dari saveCellData (inline edit)
+        if (!updateFormForDate._skipScroll) {
+            // Gunakan setTimeout agar browser selesai menghitung layout dan dimensi elemen sebelum menggulir
+            setTimeout(() => {
+                scrollReportToSelectedDate(hari);
+            }, 150);
+        }
+        updateFormForDate._skipScroll = false;
 
         initialFormState = getCurrentFormState();
         document.body.classList.remove('show-floating-save');
@@ -3186,16 +3708,35 @@ document.addEventListener('DOMContentLoaded', function() {
 
     form.addEventListener('input', checkForChanges);
 
+    let lastDateValue = tanggalInput.value;
+
     tanggalInput.addEventListener('change', async function() {
-        await fetchAyyamulBidh(this.value); // Tunggu info baru
-        updateFormForDate(this.value); // Baru update form dan tabel
+        const newDate = this.value;
+        const oldDate = lastDateValue;
+        if (newDate === oldDate) return;
+        
+        if (getCurrentFormState() !== initialFormState) {
+            // Kembalikan sementara nilai tanggal agar input konsisten selama dialog konfirmasi aktif
+            this.value = oldDate;
+            
+            const confirmed = await new Promise((resolve) => {
+                showCustomSwitchConfirmation(oldDate, newDate, resolve);
+            });
+            if (confirmed) {
+                lastDateValue = newDate;
+            }
+        } else {
+            lastDateValue = newDate;
+            await fetchAyyamulBidh(newDate);
+            updateFormForDate(newDate);
+        }
     });
     
     // Reminder & Download Button
     const today = new Date();
     const currentDay = today.getDate();
     const reminderContainer = document.getElementById('reminder-container');
-    if (currentDay > 25) {
+    if (reminderContainer && currentDay > 25) {
         const monthStr = "<?= $bulan_sekarang ?>";
         const nameEl = document.querySelector('.nama-pengguna');
         const nameVal = nameEl ? nameEl.textContent.trim() : '';
@@ -3208,10 +3749,704 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>`;
     }
 
+    // =========================================================================
+    // --- FITUR INLINE TABLE EDITING LOGIC ---
+    // =========================================================================
+    const popover = document.getElementById('table-inline-popover');
+    const popoverCloseBtn = document.getElementById('popover-close-btn');
+    const popoverTitleText = document.getElementById('popover-title-text');
+    const popoverBodyContent = document.getElementById('popover-body-content');
+
+    function closePopover() {
+        if (popover) {
+            popover.style.display = 'none';
+        }
+    }
+
+    if (popoverCloseBtn) {
+        popoverCloseBtn.addEventListener('click', closePopover);
+    }
+
+    // Helper function to get current value from active form
+    function getCurrentFormValue(key) {
+        if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
+            const input = document.getElementById('input-' + key);
+            return input ? input.value : '';
+        }
+        if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+            const element = form.elements[key];
+            return element && element.checked ? '✓' : '';
+        }
+        if (key === 'istighfar') {
+            const element = form.elements[key];
+            return element ? element.value : '';
+        }
+        if (key === 'tilawah') {
+            const surat = form.elements.tilawah_surat.value.trim();
+            const mulai = form.elements.tilawah_ayat_mulai.value.trim();
+            const selesai = form.elements.tilawah_ayat_selesai.value.trim();
+            let val = surat;
+            if (val && mulai) {
+                val += ' ' + mulai;
+                if (selesai) val += '-' + selesai;
+            }
+            return val;
+        }
+        if (['sedekah', 'almatsurat_pagi', 'almatsurat_petang'].includes(key)) {
+            const cb = form.elements[key];
+            const detailInput = document.getElementById(key + '_detail');
+            const detail = detailInput ? detailInput.value.trim() : '';
+            return cb && cb.checked ? (detail ? `✓ (${detail})` : '✓') : '';
+        }
+        if (key === 'rawatib') {
+            const rawatibDetailsKeys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+            let done = 0;
+            rawatibDetailsKeys.forEach(rkey => {
+                const element = form.elements[rkey];
+                if (element && element.checked) done++;
+            });
+            return done > 0 ? `${done}/5` : '';
+        }
+        return '';
+    }
+
+    // Tampilkan konfirmasi kustom di dalam floating save container
+    function showCustomSwitchConfirmation(oldDate, newDate, resolve, labelName = '', categoryName = '') {
+        const area = document.getElementById('floating-save-area');
+        const container = area.querySelector('.container');
+        
+        // Simpan markup asli agar bisa dikembalikan nanti
+        const originalHTML = container.innerHTML;
+        
+        // Custom info amalan yang memicu perpindahan tanggal
+        const worshipInfo = (categoryName && labelName) ? ` ke pengisian <strong>${categoryName} &gt; ${labelName}</strong>` : '';
+
+        // Buat HTML konfirmasi kustom
+        container.innerHTML = `
+            <p style="font-size: 0.8rem; font-weight: 700; color: #FFFFFF; display: flex; align-items: center; gap: 8px; margin: 0; white-space: normal; line-height: 1.4; max-width: 60%;">
+                <i class="fa-solid fa-triangle-exclamation" style="color: #FFB300; animation: warningPulse 1.5s ease-in-out infinite;"></i>
+                Ada perubahan yang belum disimpan pada tanggal ${oldDate}. Beralih tanggal${worshipInfo} akan membatalkan perubahan tersebut. Lanjutkan?
+            </p>
+            <div style="display: flex; gap: 8px;">
+                <button type="button" class="submit-btn continue-btn" style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; border: none; padding: 6px 14px; font-size: 0.8rem; font-weight: 700; border-radius: 20px; cursor: pointer; box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);">Lanjutkan</button>
+                <button type="button" class="submit-btn cancel-btn" style="background: rgba(255, 255, 255, 0.15); color: white; border: 1px solid rgba(255, 255, 255, 0.3); padding: 6px 14px; font-size: 0.8rem; font-weight: 700; border-radius: 20px; cursor: pointer;">Batal</button>
+            </div>
+        `;
+        
+        // Pastikan floating save container terlihat
+        document.body.classList.add('show-floating-save');
+        
+        // Beri efek wiggles/shake halus saat muncul
+        area.style.transform = 'translate(-50%, -10px)';
+        setTimeout(() => {
+            area.style.transform = 'translate(-50%, 0)';
+        }, 150);
+        
+        const continueBtn = container.querySelector('.continue-btn');
+        const cancelBtn = container.querySelector('.cancel-btn');
+        
+        continueBtn.addEventListener('click', async () => {
+            container.innerHTML = originalHTML;
+            tanggalInput.value = newDate;
+            lastDateValue = newDate; // Sinkronkan lastDateValue
+            await fetchAyyamulBidh(newDate);
+            updateFormForDate(newDate);
+            resolve(true);
+        });
+        
+        cancelBtn.addEventListener('click', () => {
+            container.innerHTML = originalHTML;
+            // Kembalikan ke teks perubahan awal
+            window.checkForChanges();
+            resolve(false);
+        });
+    }
+
+    // Function to ensure date in form matches selected cell date
+    async function ensureActiveDate(dateStr, labelName = '', categoryName = '') {
+        if (tanggalInput.value !== dateStr) {
+            if (getCurrentFormState() !== initialFormState) {
+                return new Promise((resolve) => {
+                    showCustomSwitchConfirmation(tanggalInput.value, dateStr, resolve, labelName, categoryName);
+                });
+            }
+            tanggalInput.value = dateStr;
+            lastDateValue = dateStr; // Sinkronkan lastDateValue
+            await fetchAyyamulBidh(dateStr);
+            updateFormForDate(dateStr);
+        }
+        return true;
+    }
+
+    // Deteksi klik pada editable-cell atau status-locked
+    document.querySelector('.table-container').addEventListener('click', async function(e) {
+        const cell = e.target.closest('.editable-cell');
+        if (!cell) {
+            const lockedCell = e.target.closest('.status-locked');
+            if (lockedCell && lockedCell.dataset.key === 'ayamul_bidh') {
+                window.openAyyamulBidhModal();
+            }
+            return;
+        }
+        
+        const key = cell.dataset.key;
+        const day = parseInt(cell.dataset.day);
+        const yearMonth = tanggalInput.value.substring(0, 7);
+        const dayStr = String(day).padStart(2, '0');
+        const selectedDateStr = `${yearMonth}-${dayStr}`;
+        
+        // Cari nama kategori ibadah induk dari baris tabel
+        const row = cell.closest('tr');
+        let categoryName = '';
+        let currRow = row;
+        while (currRow) {
+            const catCell = currRow.querySelector('.kategori-utama.td-ibadah');
+            if (catCell) {
+                categoryName = catCell.textContent.trim();
+                break;
+            }
+            currRow = currRow.previousElementSibling;
+        }
+
+        // Cari nama amalan secara presisi (selalu td-ibadah terakhir di baris tersebut untuk menghindari tabrakan header kategori)
+        const labelCells = row.querySelectorAll('.td-ibadah');
+        const labelName = labelCells[labelCells.length - 1].textContent.trim();
+
+        // Hindari pergeseran tabel saat mengklik sel secara langsung
+        updateFormForDate._skipScroll = true;
+
+        // Pastikan form memuat data tanggal sel yang sesuai
+        const dateSwitched = await ensureActiveDate(selectedDateStr, labelName, categoryName);
+        if (!dateSwitched) {
+            updateFormForDate._skipScroll = false;
+            return;
+        }
+
+        // Tampilkan popover editor untuk semua sel (termasuk dhuha, tahajud, senin_kamis, ayamul_bidh)
+        openPopover(cell, key, day, selectedDateStr, labelName);
+    });
+
+    function openPopover(originalCell, key, day, dateStr, labelName) {
+        // Cari elemen sel yang baru jika DOM tabel telah dibangun ulang
+        const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`) || originalCell;
+        closePopover();
+        
+        // Cari nama kategori ibadah induk dari baris tabel
+        const row = cell.closest('tr');
+        let categoryName = '';
+        let currRow = row;
+        while (currRow) {
+            const catCell = currRow.querySelector('.kategori-utama.td-ibadah');
+            if (catCell) {
+                categoryName = catCell.textContent.trim();
+                break;
+            }
+            currRow = currRow.previousElementSibling;
+        }
+
+        // Tampilkan kategori dan nama ibadah di header popover secara premium
+        popoverTitleText.innerHTML = `
+            <div style="display: flex; flex-direction: column; line-height: 1.2;">
+                <span style="font-size: 0.65rem; font-weight: 700; text-transform: uppercase; color: var(--md-sys-color-primary); letter-spacing: 0.5px; margin-bottom: 2px;">${categoryName}</span>
+                <span style="font-size: 0.9rem; font-weight: 700; color: var(--md-sys-color-on-surface); display: inline-flex; align-items: center; gap: 4px; white-space: nowrap;">
+                    <i class="fa-solid fa-pen-to-square" style="font-size: 0.8rem; color: var(--md-sys-color-primary);"></i> ${labelName} - Tgl ${day}
+                </span>
+            </div>
+        `;
+        
+        const yearMonth = dateStr.substring(0, 7);
+        const currentValue = getCurrentFormValue(key);
+        
+        // Buat konten popover dinamis
+        let bodyHtml = '';
+        
+        if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+            // QUICK TOGGLE POPOVER (Dhuha, Tahajud, Senin/Kamis, Ayyamul Bidh)
+            const options = [
+                { val: '✓', label: '✓ Telah Dilakukan', class: 'status-good', icon: 'fa-circle-check' },
+                { val: '', label: '-- Belum Dilakukan', class: 'status-empty', icon: 'fa-circle-xmark' }
+            ];
+            
+            bodyHtml += `<div class="popover-sholat-grid" style="grid-template-columns: 1fr; gap: 8px;">`;
+            options.forEach(opt => {
+                const isActive = (opt.val === currentValue) ? 'active' : '';
+                bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
+            });
+            bodyHtml += `</div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            // Event listener untuk tombol opsi
+            popoverBodyContent.querySelectorAll('.popover-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    popoverBodyContent.querySelectorAll('.popover-toggle-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    const val = this.dataset.value;
+                    saveCellData(dateStr, key, val, cell);
+                    
+                    // Beri Toast informatif
+                    showToast(`Status ${categoryName} > ${labelName} berhasil diubah!`, 'success');
+                });
+            });
+            
+        } else if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
+            // SHOLAT WAJIB
+            const sholatStates = [
+                { val: '', label: '--', class: 'status-empty', icon: 'fa-circle-question' },
+                { val: 'M', label: 'Masjid', class: 'status-good', icon: 'fa-mosque' },
+                { val: 'R-J', label: 'R. Jam', class: 'status-ok-2', icon: 'fa-house-user' },
+                { val: 'M-S', label: 'M. Sen', class: 'status-ok-1', icon: 'fa-person-praying' },
+                { val: 'R', label: 'R. Sen', class: 'status-ok-1', icon: 'fa-house' },
+                { val: 'Q', label: 'Qadha', class: 'status-qadha', icon: 'fa-clock-rotate-left' }
+            ];
+            
+            let initialQDate = '';
+            let initialQTime = '';
+            let isQadha = false;
+            if (typeof currentValue === 'string' && currentValue.startsWith('Q (')) {
+                isQadha = true;
+                const matches = currentValue.match(/Q \((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\)/);
+                if (matches) {
+                    initialQDate = matches[1];
+                    initialQTime = matches[2];
+                }
+            } else if (currentValue === 'Q') {
+                isQadha = true;
+            }
+            
+            bodyHtml += `<div class="popover-sholat-grid">`;
+            sholatStates.forEach(s => {
+                const isActive = (s.val === 'Q' && isQadha) || (!isQadha && s.val === currentValue) ? 'active' : '';
+                bodyHtml += `<button type="button" class="popover-option-btn popover-sholat-btn ${isActive}" data-value="${s.val}"><i class="fa-solid ${s.icon}"></i> ${s.label}</button>`;
+            });
+            bodyHtml += `</div>`;
+            
+            bodyHtml += `<div class="popover-qadha-fields" id="popover-qadha-wrapper" style="display: ${isQadha ? 'grid' : 'none'};">
+                <input type="date" class="popover-input" id="popover-qadha-date" value="${initialQDate || new Date().toISOString().slice(0, 10)}" aria-label="Tanggal Qadha">
+                <input type="time" class="popover-input" id="popover-qadha-time" value="${initialQTime || new Date().toTimeString().slice(0, 5)}" aria-label="Waktu Qadha">
+            </div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            // Event listener untuk tombol opsi sholat
+            popoverBodyContent.querySelectorAll('.popover-sholat-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    popoverBodyContent.querySelectorAll('.popover-sholat-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    const val = this.dataset.value;
+                    const qWrapper = document.getElementById('popover-qadha-wrapper');
+                    if (val === 'Q') {
+                        qWrapper.style.display = 'grid';
+                        triggerQadhaSave();
+                    } else {
+                        qWrapper.style.display = 'none';
+                        // Simpan instan untuk non-Qadha!
+                        saveCellData(dateStr, key, val, cell);
+                    }
+                });
+            });
+            
+            function triggerQadhaSave() {
+                const qDate = document.getElementById('popover-qadha-date').value;
+                const qTime = document.getElementById('popover-qadha-time').value;
+                if (qDate && qTime) {
+                    saveCellData(dateStr, key, `Q (${qDate} ${qTime})`, cell);
+                }
+            }
+
+            const qDateInput = document.getElementById('popover-qadha-date');
+            const qTimeInput = document.getElementById('popover-qadha-time');
+            if (qDateInput && qTimeInput) {
+                [qDateInput, qTimeInput].forEach(inp => {
+                    inp.addEventListener('input', triggerQadhaSave);
+                });
+            }
+            
+        } else if (key === 'rawatib') {
+            // RAWATIB
+            const rawatibSubKeys = {
+                'rawatib_subuh_q': '2 Rakaat sebelum Subuh ←🌅',
+                'rawatib_dzuhur_q': '2 atau 4 Rakaat sebelum Dzuhur ←☀️',
+                'rawatib_dzuhur_b': '2 Rakaat setelah Dzuhur →☀️',
+                'rawatib_maghrib_b': '2 Rakaat setelah Maghrib →🌇',
+                'rawatib_isya_b': '2 Rakaat setelah Isya →☪️'
+            };
+            
+            bodyHtml += `<div style="display: flex; flex-direction: column; gap: 8px;">`;
+            for (const rkey in rawatibSubKeys) {
+                const isChecked = (form.elements[rkey] && form.elements[rkey].checked) ? 'checked' : '';
+                bodyHtml += `<div class="checkbox-group" style="font-size: 0.8rem;">
+                    <input type="checkbox" id="popover-${rkey}" data-rkey="${rkey}" ${isChecked}>
+                    <label for="popover-${rkey}">${rawatibSubKeys[rkey]}</label>
+                </div>`;
+            }
+            bodyHtml += `</div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            function triggerRawatibSave() {
+                const details = {};
+                popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                    details[cb.dataset.rkey] = cb.checked ? '✓' : '';
+                });
+                saveCellData(dateStr, key, JSON.stringify(details), cell);
+            }
+            
+            popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.addEventListener('change', triggerRawatibSave);
+            });
+            
+        } else if (key === 'istighfar') {
+            // ISTIGHFAR
+            const istighfarSteps = [0, 20, 50, 100, 150, 200];
+            const currentIstighfarNum = parseInt(currentValue) || 0;
+            
+            bodyHtml += `<div class="popover-sholat-grid">`;
+            istighfarSteps.forEach(val => {
+                const isActive = (currentIstighfarNum === val) ? 'active' : '';
+                bodyHtml += `<button type="button" class="popover-option-btn popover-istighfar-btn ${isActive}" data-value="${val}">${val}</button>`;
+            });
+            bodyHtml += `</div>`;
+            
+            bodyHtml += `<div style="margin-top: 4px;">
+                <label style="font-size: 0.75rem; margin-bottom: 4px; display: block;">Atau angka kustom:</label>
+                <input type="number" class="popover-input" id="popover-istighfar-custom" min="0" max="1000" value="${currentValue || ''}" placeholder="Angka kustom">
+            </div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            const customInput = document.getElementById('popover-istighfar-custom');
+            
+            // Klik opsi cepat langsung set nilai dan simpan instan!
+            popoverBodyContent.querySelectorAll('.popover-istighfar-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    const val = this.dataset.value;
+                    customInput.value = val;
+                    saveCellData(dateStr, key, val, cell);
+                });
+            });
+            
+            customInput.addEventListener('input', function() {
+                const val = this.value || 0;
+                saveCellData(dateStr, key, val, cell);
+            });
+            
+        } else if (key === 'tilawah') {
+            // TILAWAH
+            let surah = '';
+            let startAyat = '';
+            let endAyat = '';
+            if (currentValue) {
+                const parts = currentValue.match(/^(.*?)\s*(\d+)-?(\d+)?$/);
+                if (parts) {
+                    surah = parts[1] ? parts[1].trim() : '';
+                    startAyat = parts[2] || '';
+                    endAyat = parts[3] || '';
+                } else {
+                    surah = currentValue;
+                }
+            }
+            
+            bodyHtml += `<div style="display: flex; flex-direction: column; gap: 8px;">
+                <div>
+                    <label style="font-size: 0.75rem; margin-bottom: 2px; display: block;">Nama Surat:</label>
+                    <input type="text" class="popover-input" id="popover-tilawah-surat" value="${surah.replace(/"/g, '&quot;')}" placeholder="Contoh: Al-Baqarah">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+                    <div>
+                        <label style="font-size: 0.75rem; margin-bottom: 2px; display: block;">Ayat Ke:</label>
+                        <input type="text" class="popover-input" id="popover-tilawah-mulai" value="${startAyat}" placeholder="Mulai">
+                    </div>
+                    <div>
+                        <label style="font-size: 0.75rem; margin-bottom: 2px; display: block;">Sampai:</label>
+                        <input type="text" class="popover-input" id="popover-tilawah-selesai" value="${endAyat}" placeholder="Selesai">
+                    </div>
+                </div>
+            </div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            function triggerTilawahSave() {
+                const sVal = document.getElementById('popover-tilawah-surat').value.trim();
+                const startVal = document.getElementById('popover-tilawah-mulai').value.trim();
+                const endVal = document.getElementById('popover-tilawah-selesai').value.trim();
+                
+                let text = sVal;
+                if (text && startVal) {
+                    text += ' ' + startVal;
+                    if (endVal) {
+                        text += '-' + endVal;
+                    }
+                }
+                saveCellData(dateStr, key, text, cell);
+            }
+            
+            const tSurat = document.getElementById('popover-tilawah-surat');
+            const tMulai = document.getElementById('popover-tilawah-mulai');
+            const tSelesai = document.getElementById('popover-tilawah-selesai');
+            
+            [tSurat, tMulai, tSelesai].forEach(inp => {
+                inp.addEventListener('input', triggerTilawahSave);
+            });
+            
+        } else if (['sedekah', 'almatsurat_pagi', 'almatsurat_petang'].includes(key)) {
+            // SEDEKAH ATAU ALMATSURAT
+            let isChecked = false;
+            let detailVal = '';
+            const match = typeof currentValue === 'string' && currentValue.match(/^✓ \((.*)\)$/);
+            if (match) {
+                isChecked = true;
+                detailVal = match[1];
+            } else {
+                isChecked = (currentValue === '✓');
+            }
+            
+            let labelText = 'Lakukan amalan';
+            let placeholderText = 'Detail opsional';
+            if (key === 'sedekah') {
+                labelText = 'Sedekah';
+                placeholderText = 'Cth: Uang, makanan';
+            } else if (key === 'almatsurat_pagi') {
+                labelText = 'Al-Matsurat Pagi';
+                placeholderText = 'Cth: Sampai ayat 10';
+            } else if (key === 'almatsurat_petang') {
+                labelText = 'Al-Matsurat Petang';
+                placeholderText = 'Cth: Lengkap';
+            }
+            
+            bodyHtml += `<div class="checkbox-group" style="font-size: 0.85rem; margin-bottom: 4px;">
+                <input type="checkbox" id="popover-check" ${isChecked ? 'checked' : ''}>
+                <label for="popover-check">${labelText}</label>
+            </div>
+            <div id="popover-detail-wrapper" style="display: ${isChecked ? 'block' : 'none'}; margin-top: 4px;">
+                <input type="text" class="popover-input" id="popover-detail-text" value="${detailVal.replace(/"/g, '&quot;')}" placeholder="${placeholderText}">
+            </div>`;
+            
+            popoverBodyContent.innerHTML = bodyHtml;
+            
+            const cb = document.getElementById('popover-check');
+            const wrapper = document.getElementById('popover-detail-wrapper');
+            const detailText = document.getElementById('popover-detail-text');
+            
+            function triggerDetailsSave() {
+                let finalValue = '';
+                if (cb.checked) {
+                    const text = detailText.value.trim();
+                    finalValue = text ? `✓ (${text})` : '✓';
+                }
+                saveCellData(dateStr, key, finalValue, cell);
+            }
+            
+            cb.addEventListener('change', function() {
+                wrapper.style.display = this.checked ? 'block' : 'none';
+                triggerDetailsSave();
+            });
+            
+            detailText.addEventListener('input', triggerDetailsSave);
+        }
+        
+        // Posisikan Popover secara presisi di dekat sel yang diklik
+        // Langkah 1: Tempatkan popover secara tidak terlihat di area luas untuk menghitung ukuran aslinya (tanpa tertekan tepi layar)
+        popover.style.left = '0px';
+        popover.style.top = '0px';
+        popover.style.display = 'block';
+        popover.style.visibility = 'hidden';
+        
+        const popoverWidth = popover.offsetWidth;
+        const popoverHeight = popover.offsetHeight;
+        
+        const cellRect = cell.getBoundingClientRect();
+        const offsetParent = popover.offsetParent || document.body;
+        const parentRect = offsetParent.getBoundingClientRect();
+        
+        // Langkah 2: Hitung posisi relatif terpusat terhadap sel berdasarkan koordinat viewport
+        let popoverViewportLeft = cellRect.left + (cellRect.width / 2) - (popoverWidth / 2);
+        let popoverViewportTop = cellRect.bottom + 8; // default di bawah sel
+        
+        // Langkah 3: Sesuaikan jika melebihi batas kiri/kanan layar (viewport)
+        if (popoverViewportLeft < 10) {
+            popoverViewportLeft = 10;
+        } else if (popoverViewportLeft + popoverWidth > window.innerWidth - 10) {
+            popoverViewportLeft = window.innerWidth - popoverWidth - 10;
+        }
+        
+        // Langkah 4: Sesuaikan jika melebihi batas bawah layar (tampilkan di atas sel)
+        if (popoverViewportTop + popoverHeight > window.innerHeight - 10) {
+            popoverViewportTop = cellRect.top - popoverHeight - 8;
+        }
+        
+        // Langkah 5: Konversikan koordinat viewport kembali ke koordinat offsetParent mutlak
+        const popoverLeft = popoverViewportLeft - parentRect.left;
+        const popoverTop = popoverViewportTop - parentRect.top;
+        
+        popover.style.left = `${popoverLeft}px`;
+        popover.style.top = `${popoverTop}px`;
+        popover.style.visibility = 'visible';
+    }
+
+    // Tampilkan perubahan sel tabel secara visual tanpa simpan instan
+    function updateTableCellVisually(cell, key, newVal) {
+        const isToday = cell.classList.contains('today-column');
+        const colorClass = getCellColorClassJS(key, newVal);
+        
+        cell.className = `editable-cell ${colorClass}${isToday ? ' today-column' : ''}`;
+        
+        let displayVal = newVal.toString().replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        if (key === 'istighfar') {
+             if (newVal >= 200) displayVal = '✓✓';
+             else if (newVal >= 100) displayVal = '✓';
+             else displayVal = '';
+        } else if (displayVal.startsWith('✓ (')) {
+            displayVal = displayVal.replace('✓ (', '✓<br><small>(').replace(')', ')</small>');
+        } else if (displayVal.startsWith('Q (')) {
+            const qmatch = displayVal.match(/^Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)$/);
+            if (qmatch) {
+                displayVal = 'Q ' + qmatch[1];
+            } else {
+                displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+            }
+        }
+        cell.innerHTML = displayVal;
+    }
+
+    function saveCellData(dateStr, key, value, originalCell) {
+        const day = originalCell.dataset.day;
+        // Cari elemen sel yang baru jika DOM tabel telah dibangun ulang
+        const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`) || originalCell;
+        const rawatibDetailsKeys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+
+        if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
+            window.setPrayerSliderState(key, value);
+        } else if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+            const cb = form.elements[key];
+            if (cb) {
+                cb.checked = (value === '✓');
+                cb.dispatchEvent(new Event('change'));
+            }
+        } else if (key === 'rawatib') {
+            const details = JSON.parse(value);
+            let done = 0;
+            rawatibDetailsKeys.forEach(rkey => {
+                const cb = form.elements[rkey];
+                if (cb) {
+                    cb.checked = !!details[rkey];
+                    cb.dispatchEvent(new Event('change'));
+                }
+                if (details[rkey] === '✓') done++;
+            });
+            value = done > 0 ? `${done}/5` : '';
+        } else if (key === 'istighfar') {
+            const val = parseInt(value) || 0;
+            const element = form.elements[key];
+            if (element) {
+                element.value = val;
+            }
+            if (istighfarSlider) istighfarSlider.value = val;
+            if (istighfarValueDisplay) istighfarValueDisplay.textContent = val;
+            updateIstighfarLabel(val);
+        } else if (key === 'tilawah') {
+            let surah = '';
+            let start = '';
+            let end = '';
+            if (value) {
+                const parts = value.match(/^(.*?)\s*(\d+)-?(\d+)?$/);
+                if (parts) {
+                    surah = parts[1] ? parts[1].trim() : '';
+                    start = parts[2] || '';
+                    end = parts[3] || '';
+                } else {
+                    surah = value;
+                }
+            }
+            form.elements.tilawah_surat.value = surah;
+            form.elements.tilawah_ayat_mulai.value = start;
+            form.elements.tilawah_ayat_selesai.value = end;
+        } else if (['sedekah', 'almatsurat_pagi', 'almatsurat_petang'].includes(key)) {
+            let isChecked = false;
+            let detailVal = '';
+            const match = typeof value === 'string' && value.match(/^✓ \((.*)\)$/);
+            if (match) {
+                isChecked = true;
+                detailVal = match[1];
+            } else {
+                isChecked = (value === '✓');
+            }
+            const cb = form.elements[key];
+            if (cb) {
+                cb.checked = isChecked;
+                cb.dispatchEvent(new Event('change'));
+                const wrapper = document.getElementById(cb.dataset.detailsWrapper);
+                if (wrapper) {
+                    wrapper.style.display = isChecked ? 'block' : 'none';
+                    wrapper.querySelector('input').value = detailVal;
+                }
+            }
+        }
+
+        updateTableCellVisually(cell, key, value);
+
+        closePopover();
+
+        checkForChanges();
+
+        cell.classList.add('cell-save-success');
+        setTimeout(() => cell.classList.remove('cell-save-success'), 800);
+    }
+
+    // Klik di luar popover untuk menutup popover secara otomatis
+    document.addEventListener('click', function(e) {
+        if (popover && popover.style.display === 'block') {
+            if (!popover.contains(e.target) && !e.target.closest('.editable-cell') && !e.target.closest('.modal-content') && !e.target.closest('.info-btn')) {
+                closePopover();
+            }
+        }
+    });
+
+    // --- NAVIGASI BULAN (PREV / NEXT) ---
+    const monthPrevBtn = document.getElementById('month-prev-btn');
+    const monthNextBtn = document.getElementById('month-next-btn');
+
+    function navigateMonth(direction) {
+        const current = new Date(tanggalInput.value + 'T00:00:00');
+        current.setMonth(current.getMonth() + direction);
+        // Pastikan hari tidak melebihi jumlah hari di bulan baru
+        const daysInNewMonth = new Date(current.getFullYear(), current.getMonth() + 1, 0).getDate();
+        const newDay = Math.min(current.getDate(), daysInNewMonth);
+        current.setDate(newDay);
+        
+        const yyyy = current.getFullYear();
+        const mm = String(current.getMonth() + 1).padStart(2, '0');
+        const dd = String(current.getDate()).padStart(2, '0');
+        const newDateStr = `${yyyy}-${mm}-${dd}`;
+        
+        tanggalInput.value = newDateStr;
+        // Trigger change event (which handles fetching ayyamul bidh and rebuilding)
+        tanggalInput.dispatchEvent(new Event('change'));
+    }
+
+    if (monthPrevBtn) {
+        monthPrevBtn.addEventListener('click', () => navigateMonth(-1));
+    }
+    if (monthNextBtn) {
+        monthNextBtn.addEventListener('click', () => navigateMonth(1));
+    }
+
     // Initial load
     updateFormForDate(tanggalInput.value);
 });
 </script>
+
+<div id="table-inline-popover" class="table-popover" style="display: none;">
+    <div class="popover-header">
+        <span class="popover-title" id="popover-title-text"><i class="fa-solid fa-pen-to-square"></i> Edit Amalan</span>
+        <button type="button" class="popover-close" id="popover-close-btn">&times;</button>
+    </div>
+    <div class="popover-body" id="popover-body-content">
+        <!-- Dynamic content -->
+    </div>
+</div>
 
 <?php include __DIR__ . '/prayer_slider_handler.php'; ?>
 </body>

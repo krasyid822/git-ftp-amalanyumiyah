@@ -34,12 +34,18 @@
         const wrapper = slider?.closest('.prayer-slider-wrapper');
         const labels = wrapper?.querySelectorAll('.slider-label') || [];
         
-        if (!slider || !hiddenInput || !indicator) {
-            console.warn('setPrayerSliderState: Missing elements for', prayerKey);
+        const safeValue = value || '';
+
+        // Pastikan hidden input selalu ter-update untuk deteksi perubahan form & AJAX
+        if (hiddenInput) {
+            hiddenInput.value = safeValue;
+        }
+        
+        if (!slider || !indicator) {
+            // Abaikan peringatan log jika elemen slider visual tidak ada (mode hemat layar)
             return;
         }
 
-        const safeValue = value || '';
         if (qadhaWrapper) qadhaWrapper.style.display = 'none';
         
         // Tentukan posisi slider

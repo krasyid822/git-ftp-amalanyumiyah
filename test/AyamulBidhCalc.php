@@ -4,6 +4,16 @@
  * Menghitung tanggal puasa Ayyamul Bidh berdasarkan kalender Hijriyah
  */
 class AyyamulBidhCalculator {
+    private $adjustment = 0; // Kalibrasi kalender Hijriyah
+
+    public function setAdjustment($days) {
+        $this->adjustment = (int)$days;
+    }
+
+    public function getAdjustment() {
+        return $this->adjustment;
+    }
+
     private $hijriMonths = [
         1 => "Muharram",
         2 => "Safar",
@@ -35,7 +45,7 @@ class AyyamulBidhCalculator {
         $gm = $date->format('n');
         $gd = $date->format('j');
 
-        $jd = $this->gregorianToJulian($gy, $gm, $gd);
+        $jd = $this->gregorianToJulian($gy, $gm, $gd) + $this->adjustment;
         $l = $jd - 1948440 + 10632;
         $n = (int)(($l - 1) / 10631);
         $l = $l - 10631 * $n + 354;
@@ -60,7 +70,7 @@ class AyyamulBidhCalculator {
         $gm = ($date instanceof DateTime) ? $date->format('n') : date('n', strtotime($date));
         $gd = ($date instanceof DateTime) ? $date->format('j') : date('j', strtotime($date));
 
-        $jd = $this->gregorianToJulian($gy, $gm, $gd);
+        $jd = $this->gregorianToJulian($gy, $gm, $gd) + $this->adjustment;
         $l = $jd - 1948440 + 10632;
         $n = (int)(($l - 1) / 10631);
         $l = $l - 10631 * $n + 354;
@@ -142,7 +152,7 @@ class AyyamulBidhCalculator {
     private function getGregorianFromHijri($hy, $hm, $hd) {
         // Ini adalah pendekatan sederhana, untuk implementasi lebih akurat
         // sebaiknya menggunakan library khusus atau API
-        $jd = (int)((11 * $hy + 3) / 30) + (int)(354 * $hy) + (int)(30 * $hm) - (int)(($hm - 1) / 2) + $hd + 1948440 - 385;
+        $jd = (int)((11 * $hy + 3) / 30) + (int)(354 * $hy) + (int)(30 * $hm) - (int)(($hm - 1) / 2) + $hd + 1948440 - 385 - $this->adjustment;
         
         $l = $jd + 68569;
         $n = (int)((4 * $l) / 146097);
