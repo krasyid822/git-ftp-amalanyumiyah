@@ -181,6 +181,25 @@ function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
          $jadwal_puasa_final = [$bidhData['error']];
     }
 
+    // Hitung Hari Tasyrik & Hari Raya untuk tahun Hijriyah saat ini
+    $tasyrik_dates = [];
+    $currentHijri = $calculator->gregorianToHijri($currentDate);
+    if (!empty($currentHijri['year'])) {
+        $hy = $currentHijri['year'];
+        // Idul Adha (10 Dzulhijjah) & Hari Tasyrik (11, 12, 13 Dzulhijjah)
+        for ($d = 10; $d <= 13; $d++) {
+            $gregDate = $calculator->getGregorianFromHijri($hy, 12, $d);
+            if ($gregDate) {
+                $tasyrik_dates[] = $gregDate->format('Y-m-d');
+            }
+        }
+        // Idul Fitri (1 Shawwal)
+        $eid_fitr = $calculator->getGregorianFromHijri($hy, 10, 1);
+        if ($eid_fitr) {
+            $tasyrik_dates[] = $eid_fitr->format('Y-m-d');
+        }
+    }
+
     return [
         'title'       => 'Puasa Ayyamul Bidh (Puasa Hari-hari Putih)',
         'description' => 'Puasa sunnah yang dilaksanakan pada tanggal 13, 14, dan 15 setiap bulan Hijriah. Disebut hari-hari putih karena pada malam-malam tersebut, bulan bersinar terang menyinari bumi.',
@@ -188,6 +207,7 @@ function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
         'dates_title' => 'Perkiraan Jadwal Bulan Ini (' . ($bidhData['current_hijri_month'] ?? '') . ' ' . ($bidhData['current_hijri_year'] ?? '') . '):',
         'dates'       => $jadwal_puasa_final,
         'raw_dates'   => $raw_dates,
+        'tasyrik_dates' => $tasyrik_dates,
         'disclaimer'  => 'Perhitungan ini menggunakan algoritma internal dan akurasinya bisa berbeda satu hari, tergantung metode penentuan awal bulan (rukyat/hisab) di wilayah Anda.'
     ];
 }
@@ -196,6 +216,31 @@ function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
 function bi_is_senin_kamis($dateStr) {
     $dayOfWeek = date('N', strtotime($dateStr)); // 1 for Monday, 4 for Thursday
     return ($dayOfWeek == 1 || $dayOfWeek == 4);
+}
+
+function bi_is_tasyrik($dateStr) {
+    global $dataFile;
+    require_once __DIR__ . '/AyamulBidhCalc.php';
+    $calculator = new AyyamulBidhCalculator();
+    
+    $dataAmalan = bacaDataAmalan($dataFile);
+    $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
+    $calculator->setAdjustment($adj);
+    
+    $date = new DateTime($dateStr);
+    $hijri = $calculator->gregorianToHijri($date);
+    
+    // Idul Adha (10 Dzulhijjah) & Hari Tasyrik (11, 12, 13 Dzulhijjah)
+    if ($hijri['month'] == 12 && ($hijri['day'] == 10 || $hijri['day'] == 11 || $hijri['day'] == 12 || $hijri['day'] == 13)) {
+        return true;
+    }
+    
+    // Idul Fitri (1 Shawwal)
+    if ($hijri['month'] == 10 && $hijri['day'] == 1) {
+        return true;
+    }
+    
+    return false;
 }
 
 function bi_is_ayyamul_bidh($dateStr) {
@@ -453,7 +498,7 @@ function getCellColorClass($key, $value) {
             return 'status-empty';
         case 'istighfar':
             if ($value >= 200) return 'status-good';
-            if ($value >= 100) return 'status-ok-2';
+            if ($value > 0) return 'status-ok-1'; // Kuning (Belum capai target)
             return 'status-empty';
         case 'tilawah':
             return 'status-ok-2'; // Setiap tilawah dianggap baik
@@ -2375,25 +2420,22 @@ if (isset($manifestPath)) {
             content: '';
             position: absolute;
             inset: 0;
-            background-color: var(--md-sys-color-primary-container);
-            opacity: 0.25;
+            background-color: #E6F2F2;
+            opacity: 0.4;
             pointer-events: none;
             z-index: 0;
         }
         thead .today-column {
-            background-color: var(--md-sys-color-primary) !important;
+            background: linear-gradient(180deg, var(--md-sys-color-primary) 0%, var(--color-primary-dark) 100%) !important;
             color: var(--md-sys-color-on-primary) !important;
             font-weight: 700;
-            box-shadow: inset 0 3px 0 0 var(--md-sys-color-tertiary);
         }
-        /* Garis batas kiri-kanan kolom hari ini */
+        /* Garis batas kiri-kanan kolom hari ini dihilangkan agar tidak ada garis vertikal yang mengganggu */
         tbody td.today-column {
-            border-left: 1.5px solid var(--md-sys-color-primary) !important;
-            border-right: 1.5px solid var(--md-sys-color-primary) !important;
         }
         tbody td.today-column.status-empty {
-            background-color: var(--md-sys-color-primary-container) !important;
-            opacity: 0.65;
+            background-color: #E6F2F2 !important;
+            opacity: 1;
         }
 
         /* Navigasi Bulan di heading tabel */
@@ -2407,6 +2449,21 @@ if (isset($manifestPath)) {
         .month-navigator h2 {
             margin: 0;
             font-size: 1.15rem;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            border-radius: var(--md-sys-shape-corner-medium);
+            user-select: none;
+        }
+        .month-navigator h2:hover {
+            background-color: var(--md-sys-color-primary-container) !important;
+            color: var(--md-sys-color-on-primary-container) !important;
+        }
+        .month-navigator h2:active {
+            transform: scale(0.97);
         }
         .month-nav-btn {
             display: inline-flex;
@@ -2631,9 +2688,9 @@ if (isset($manifestPath)) {
             left: 40px;
             z-index: 12;
             background: linear-gradient(180deg, #E8E8E8 0%, #D0D0D0 100%) !important;
-            min-width: 270px;
-            max-width: 270px;
-            width: 270px;
+            min-width: 290px;
+            max-width: 290px;
+            width: 290px;
             box-shadow: 2px 0 5px rgba(0,0,0,0.08);
         }
 
@@ -2666,9 +2723,10 @@ if (isset($manifestPath)) {
             left: 160px;
             z-index: 10;
             background-color: #FFFFFF !important;
-            min-width: 150px;
-            max-width: 150px;
-            width: 150px;
+            min-width: 170px;
+            max-width: 170px;
+            width: 170px;
+            white-space: nowrap;
             box-shadow: 2px 0 5px rgba(0,0,0,0.08); /* Beri shadow halus di sebelah kanan agar terlihat terpisah saat digeser */
         }
         
@@ -2739,6 +2797,88 @@ if (isset($manifestPath)) {
     </style>
 </head>
 <body>
+    <noscript>
+        <style>
+            /* Sembunyikan semua elemen halaman utama dan sesuaikan gaya body */
+            body > *:not(noscript) { display: none !important; }
+            body {
+                background-color: #121212 !important;
+                color: #FFFFFF !important;
+                margin: 0;
+                padding: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                min-height: 100vh;
+                font-family: 'Inter', sans-serif;
+                text-align: center;
+            }
+            .noscript-overlay {
+                max-width: 500px;
+                padding: 32px;
+                background: rgba(255, 255, 255, 0.05);
+                border-radius: 24px;
+                border: 1px solid rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+                margin: 20px;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 16px;
+            }
+            .noscript-gif {
+                width: 100%;
+                max-width: 320px;
+                border-radius: 16px;
+                box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+                border: 2px solid #006a6a;
+            }
+            .noscript-title {
+                font-size: 1.5rem;
+                font-weight: 700;
+                color: #ffb4a9;
+                margin: 0;
+            }
+            .noscript-desc {
+                font-size: 0.9rem;
+                color: #e0e0e0;
+                line-height: 1.6;
+                margin: 0;
+            }
+            .noscript-steps {
+                text-align: left;
+                background: rgba(0, 0, 0, 0.2);
+                padding: 16px 20px 16px 36px;
+                border-radius: 12px;
+                font-size: 0.85rem;
+                color: #d0d0d0;
+                width: 100%;
+                box-sizing: border-box;
+                line-height: 1.5;
+                margin: 0;
+            }
+            .noscript-steps li {
+                margin-bottom: 8px;
+            }
+            .noscript-steps li:last-child {
+                margin-bottom: 0;
+            }
+        </style>
+        <div class="noscript-overlay">
+            <img class="noscript-gif" src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExamgxOHhmbnRjN3ptMThhaGlxcmZhdzBvMGFvejBsbzR0YjNrZTNubSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/98uQnniC09A2W53IXw/giphy.gif" alt="JavaScript engine required">
+            <h1 class="noscript-title">JavaScript Tidak Aktif!</h1>
+            <p class="noscript-desc">Aplikasi Amalan Yumiyah memerlukan mesin JavaScript aktif agar semua fitur tabel interaktif, popover pencatatan, dan kalkulasi otomatis dapat bekerja dengan normal.</p>
+            <p class="noscript-desc"><strong>Cara Mengaktifkan JavaScript:</strong></p>
+            <ol class="noscript-steps">
+                <li>Buka <strong>Pengaturan (Settings)</strong> di browser Anda.</li>
+                <li>Cari menu <strong>Keamanan dan Privasi (Privacy & Security)</strong>.</li>
+                <li>Pilih bagian <strong>Pengaturan Situs (Site Settings)</strong>.</li>
+                <li>Cari opsi <strong>JavaScript</strong> dan ubah statusnya menjadi <strong>Diizinkan (Allowed)</strong>.</li>
+                <li>Muat ulang (refresh) halaman ini setelah diaktifkan.</li>
+            </ol>
+        </div>
+    </noscript>
     <?php include __DIR__ . '/shortcuts.php'; ?>
 
 <div id="toast-notification"></div>
@@ -2789,10 +2929,15 @@ if (isset($manifestPath)) {
     </form>
 
     <div class="table-container">
-        <div class="month-navigator">
+        <div class="month-navigator" style="position: relative;">
             <button type="button" class="month-nav-btn" id="month-prev-btn" title="Bulan Sebelumnya"><i class="fa-solid fa-chevron-left"></i></button>
-            <h2>Laporan Bulan: <?= date('F Y') ?></h2>
+            <h2 id="month-title">
+                <span>Laporan Bulan: <?= date('F Y') ?></span>
+                <i class="fa-regular fa-calendar-days" style="font-size: 1.1rem; color: var(--md-sys-color-primary); opacity: 0.8;"></i>
+            </h2>
             <button type="button" class="month-nav-btn" id="month-next-btn" title="Bulan Berikutnya"><i class="fa-solid fa-chevron-right"></i></button>
+            <!-- Invisible datepicker for browser-native calendar navigation -->
+            <input type="date" id="native-datepicker" style="position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; overflow: hidden; left: 50%; top: 50%;">
         </div>
         <div class="table-wrapper">
             <table>
@@ -2823,7 +2968,7 @@ if (isset($manifestPath)) {
                         <td class="kategori-utama td-kategori-header td-ibadah" rowspan="<?= $jumlah_sub ?>"><?= htmlspecialchars($kategori) ?></td>
                         <?php endif; ?>
                         
-                        <td class="td-ibadah"><?= htmlspecialchars($label) ?></td>
+                        <td class="td-ibadah"><span style="white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><span><?= htmlspecialchars($label) ?></span><?= generate_shortcut_link($kategori, $key) ?></span></td>
                         
                         <?php for ($i = 1; $i <= $jumlah_hari; $i++): 
                             $value = $dataBulanIni[$key][$i] ?? '';
@@ -2832,7 +2977,7 @@ if (isset($manifestPath)) {
                             $is_locked = false;
                             if ($key === 'senin_kamis' || $key === 'ayamul_bidh') {
                                 $dateStr = $bulan_sekarang . '-' . sprintf('%02d', $i);
-                                if ($key === 'senin_kamis' && !bi_is_senin_kamis($dateStr)) {
+                                if ($key === 'senin_kamis' && (!bi_is_senin_kamis($dateStr) || bi_is_tasyrik($dateStr))) {
                                     $is_locked = true;
                                 } elseif ($key === 'ayamul_bidh' && !bi_is_ayyamul_bidh($dateStr)) {
                                     $is_locked = true;
@@ -2882,10 +3027,10 @@ if (isset($manifestPath)) {
         <!-- Table Legend & Shortcut Bar -->
         <div class="table-legend-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); flex-wrap: wrap; gap: 12px;">
             <div class="table-legend-items" style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; font-weight: 600; color: var(--md-sys-color-on-surface-variant);">
-                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-good); display: inline-block; border: 1px solid var(--color-good-text);"></span> Masjid / Terbaik</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-good); display: inline-block; border: 1px solid var(--color-good-text);"></span> Masjid / Terbaik / Target Tercapai</span>
                 <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-2); display: inline-block; border: 1px solid var(--color-ok-2-text);"></span> Terlaksana Baik</span>
-                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-1); display: inline-block; border: 1px solid var(--color-ok-1-text);"></span> Rumah / Sendiri</span>
-                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-qadha); display: inline-block; border: 1px solid var(--color-qadha-text);"></span> Qadha</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-1); display: inline-block; border: 1px solid var(--color-ok-1-text);"></span> Rumah / Sendiri / Belum Capai Target</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-qadha); display: inline-block; border: 1px solid var(--color-qadha-text);"></span> Qadha (Khusus Sholat)</span>
             </div>
             
             <a href="https://refleksiformentee.xo.je/" target="_blank" rel="noopener noreferrer" class="legend-shortcut-btn" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 0.8rem; font-weight: 700; color: var(--md-sys-color-primary); background-color: var(--md-sys-color-primary-container); padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(0, 106, 106, 0.2);" title="Buka platform refleksi mentee">
@@ -2960,6 +3105,33 @@ document.addEventListener('DOMContentLoaded', function() {
         const day = d.getDay(); // 1 for Monday, 4 for Thursday
         return (day === 1 || day === 4);
     }
+    
+    function generateShortcutLinkJS(key, category) {
+        let url = '';
+        let tooltip = '';
+        
+        if (category === 'SHOLAT WAJIB') {
+            url = 'https://al-waqt-9cdb7.web.app/';
+            tooltip = 'Buka panduan Sholat Wajib';
+        } else if (category === 'ALMATSURAT') {
+            const action = (key === 'almatsurat_petang') ? 'sore' : 'pagi';
+            url = `https://krasyid822.github.io/AlMatsurat?action=${action}`;
+            tooltip = `Buka panduan Al-Ma'tsurat ${action === 'pagi' ? 'Pagi' : 'Sore'}`;
+        } else if (category === 'TILAWAH') {
+            url = 'https://quran.com/';
+            tooltip = 'Buka Quran.com';
+        } else if (category === 'ISTIGHFAR') {
+            const hour = new Date().getHours();
+            const action = (hour >= 4 && hour < 12) ? 'pagi' : 'sore';
+            url = `https://krasyid822.github.io/AlMatsurat?action=${action}#amalan-istighfar`;
+            tooltip = "Buka panduan Istighfar di Al-Ma'tsurat";
+        }
+        
+        if (url) {
+            return `<a href="${url}" target="_blank" class="legend-shortcut" title="${tooltip}"><i class="fa-solid fa-arrow-up-right-from-square"></i></a>`;
+        }
+        return '';
+    }
     const daftarAmalanStructure = <?= json_encode($daftar_amalan); ?>;
     const form = document.getElementById('form-amalan');
     const tanggalInput = document.getElementById('tanggal');
@@ -3018,20 +3190,59 @@ document.addEventListener('DOMContentLoaded', function() {
             margin: { left: 24, right: 24, bottom: 24 },
             styles: {
                 fontSize: 7,
-                cellPadding: 2,
+                cellPadding: 3,
                 overflow: 'linebreak',
                 valign: 'middle',
-                halign: 'center'
+                font: 'helvetica'
             },
-            headStyles: {
-                fillColor: [75, 96, 124],
-                textColor: 255,
-                fontStyle: 'bold'
-            },
-            bodyStyles: {
-                textColor: [25, 28, 28]
-            },
-            theme: 'grid'
+            theme: 'grid',
+            didParseCell: function(data) {
+                if (data.section === 'head') {
+                    data.cell.styles.fillColor = [0, 106, 106]; // #006A6A (Primary Material You Color)
+                    data.cell.styles.textColor = [255, 255, 255];
+                    data.cell.styles.halign = 'center';
+                    data.cell.styles.fontStyle = 'bold';
+                } else if (data.section === 'body') {
+                    const htmlCell = data.cell.raw;
+                    if (htmlCell) {
+                        // Cek jenis kolom
+                        if (htmlCell.classList.contains('kategori-utama')) {
+                            data.cell.styles.fillColor = [228, 235, 234]; // #E4EBEA
+                            data.cell.styles.textColor = [25, 28, 28];
+                            data.cell.styles.halign = htmlCell.classList.contains('td-ibadah') ? 'left' : 'center';
+                            data.cell.styles.fontStyle = 'bold';
+                        } else if (htmlCell.classList.contains('td-ibadah')) {
+                            data.cell.styles.fillColor = [255, 255, 255]; // #FFFFFF
+                            data.cell.styles.textColor = [25, 28, 28];
+                            data.cell.styles.halign = 'left';
+                            data.cell.styles.fontStyle = 'normal';
+                        } else {
+                            // Ini adalah sel amalan (kolom tanggal)
+                            data.cell.styles.halign = 'center';
+                            if (htmlCell.classList.contains('status-good')) {
+                                data.cell.styles.fillColor = [168, 245, 184]; // #A8F5B8
+                                data.cell.styles.textColor = [20, 108, 46]; // #146C2E
+                                data.cell.styles.fontStyle = 'bold';
+                            } else if (htmlCell.classList.contains('status-ok-2')) {
+                                data.cell.styles.fillColor = [194, 231, 255]; // #C2E7FF
+                                data.cell.styles.textColor = [0, 101, 142]; // #00658E
+                            } else if (htmlCell.classList.contains('status-ok-1')) {
+                                data.cell.styles.fillColor = [255, 223, 158]; // #FFDF9E
+                                data.cell.styles.textColor = [122, 89, 0]; // #7A5900
+                            } else if (htmlCell.classList.contains('status-qadha')) {
+                                data.cell.styles.fillColor = [255, 218, 214]; // #FFDAD6
+                                data.cell.styles.textColor = [186, 26, 26]; // #BA1A1A
+                            } else if (htmlCell.classList.contains('status-locked')) {
+                                data.cell.styles.fillColor = [222, 229, 228]; // #DEE5E4
+                                data.cell.styles.textColor = [111, 121, 120]; // #6F7978
+                            } else if (htmlCell.classList.contains('status-empty')) {
+                                data.cell.styles.fillColor = [234, 241, 240]; // #EAF1F0
+                                data.cell.styles.textColor = [63, 73, 72]; // #3F4948
+                            }
+                        }
+                    }
+                }
+            }
         });
 
         doc.save(fileName);
@@ -3160,7 +3371,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // Urutkan key agar konsisten
         const sortedKeys = Array.from(data.keys()).sort();
         sortedKeys.forEach(key => {
-            if(key !== 'daftar_amalan_structure' && key !== 'rawatib_details_structure'){
+            if(key !== 'daftar_amalan_structure' && key !== 'rawatib_details_structure' && key !== 'tanggal' && key !== 'is_ajax'){
                 formString += `${key}=${data.get(key)}&`;
             }
         });
@@ -3510,10 +3721,18 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (seninKamisCb && seninKamisCb.offsetParent !== null) {
                 const isSK = isSeninKamisJS(tanggalStr);
-                seninKamisCb.disabled = !isSK;
-                if (!isSK) {
+                const isTasyrik = ayyamulBidhInfo && ayyamulBidhInfo.tasyrik_dates && ayyamulBidhInfo.tasyrik_dates.includes(tanggalStr);
+                
+                if (isTasyrik) {
+                    seninKamisCb.disabled = true;
                     seninKamisCb.checked = false;
+                } else {
+                    seninKamisCb.disabled = !isSK;
+                    if (!isSK) {
+                        seninKamisCb.checked = false;
+                    }
                 }
+                
                 let hint = seninKamisCb.parentNode.querySelector('.puasa-hint');
                 if (!hint) {
                     hint = document.createElement('small');
@@ -3523,7 +3742,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     hint.style.fontWeight = '700';
                     seninKamisCb.parentNode.appendChild(hint);
                 }
-                if (isSK) {
+                if (isTasyrik) {
+                    hint.textContent = ' (Hari Raya / Tasyrik - Dilarang)';
+                    hint.style.color = 'var(--md-sys-color-error)';
+                } else if (isSK) {
                     hint.textContent = ' (Hari Puasa)';
                     hint.style.color = 'var(--color-success)';
                 } else {
@@ -3576,7 +3798,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const tableContainer = document.querySelector('.table-container');
             const h2El = tableContainer.querySelector('.month-navigator h2') || tableContainer.querySelector('h2');
-            h2El.textContent = `Laporan Bulan: ${monthName}`;
+            if (h2El) {
+                h2El.innerHTML = `<span>Laporan Bulan: ${monthName}</span><i class="fa-regular fa-calendar-days" style="font-size: 1.1rem; color: var(--md-sys-color-primary); opacity: 0.8;"></i>`;
+            }
             
             const downloadBtn = tableContainer.querySelector('.download-btn');
             if (downloadBtn) {
@@ -3618,7 +3842,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         bodyHtml += `<td class="kategori-utama td-kategori-header" rowspan="${jumlahSub}">${nomor++}</td>`;
                     bodyHtml += `<td class="kategori-utama td-kategori-header td-ibadah" rowspan="${jumlahSub}">${kategori}</td>`;
                 }
-                bodyHtml += `<td class="td-ibadah">${label}</td>`;
+                const shortcutHtml = generateShortcutLinkJS(key, kategori);
+                bodyHtml += `<td class="td-ibadah"><span style="white-space: nowrap; display: inline-flex; align-items: center; gap: 4px;"><span>${label}</span>${shortcutHtml}</span></td>`;
                 for (let i = 1; i <= daysInMonth; i++) {
                     const value = dataBulanIni[key]?.[i] ?? '';
                     const dayStr = String(i).padStart(2, '0');
@@ -3626,7 +3851,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     let isLocked = false;
                     if (key === 'senin_kamis') {
-                        isLocked = !isSeninKamisJS(cellDate);
+                        const isTasyrik = ayyamulBidhInfo && ayyamulBidhInfo.tasyrik_dates && ayyamulBidhInfo.tasyrik_dates.includes(cellDate);
+                        isLocked = !isSeninKamisJS(cellDate) || isTasyrik;
                     } else if (key === 'ayamul_bidh') {
                         isLocked = !ayyamulBidhInfo || !ayyamulBidhInfo.raw_dates || !ayyamulBidhInfo.raw_dates.includes(cellDate);
                     }
@@ -3696,7 +3922,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 return 'status-empty';
             case 'istighfar':
                 if (value >= 200) return 'status-good';
-                if (value >= 100) return 'status-ok-2';
+                if (value > 0) return 'status-ok-1'; // Kuning (Belum capai target)
                 return 'status-empty';
             case 'tilawah':
                 return 'status-ok-2';
@@ -4052,7 +4278,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 const qDate = document.getElementById('popover-qadha-date').value;
                 const qTime = document.getElementById('popover-qadha-time').value;
                 if (qDate && qTime) {
-                    saveCellData(dateStr, key, `Q (${qDate} ${qTime})`, cell);
+                    saveCellData(dateStr, key, `Q (${qDate} ${qTime})`, cell, false);
                 }
             }
 
@@ -4091,7 +4317,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
                     details[cb.dataset.rkey] = cb.checked ? '✓' : '';
                 });
-                saveCellData(dateStr, key, JSON.stringify(details), cell);
+                saveCellData(dateStr, key, JSON.stringify(details), cell, false);
             }
             
             popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
@@ -4130,7 +4356,7 @@ document.addEventListener('DOMContentLoaded', function() {
             
             customInput.addEventListener('input', function() {
                 const val = this.value || 0;
-                saveCellData(dateStr, key, val, cell);
+                saveCellData(dateStr, key, val, cell, false);
             });
             
         } else if (key === 'tilawah') {
@@ -4180,7 +4406,7 @@ document.addEventListener('DOMContentLoaded', function() {
                         text += '-' + endVal;
                     }
                 }
-                saveCellData(dateStr, key, text, cell);
+                saveCellData(dateStr, key, text, cell, false);
             }
             
             const tSurat = document.getElementById('popover-tilawah-surat');
@@ -4210,38 +4436,52 @@ document.addEventListener('DOMContentLoaded', function() {
                 placeholderText = 'Cth: Uang, makanan';
             } else if (key === 'almatsurat_pagi') {
                 labelText = 'Al-Matsurat Pagi';
-                placeholderText = 'Cth: Sampai ayat 10';
+                placeholderText = 'Cth: Sampai doa almatsurat';
             } else if (key === 'almatsurat_petang') {
                 labelText = 'Al-Matsurat Petang';
-                placeholderText = 'Cth: Lengkap';
+                placeholderText = 'Cth: Sampai doa almatsurat';
             }
             
-            bodyHtml += `<div class="checkbox-group" style="font-size: 0.85rem; margin-bottom: 4px;">
-                <input type="checkbox" id="popover-check" ${isChecked ? 'checked' : ''}>
-                <label for="popover-check">${labelText}</label>
-            </div>
-            <div id="popover-detail-wrapper" style="display: ${isChecked ? 'block' : 'none'}; margin-top: 4px;">
-                <input type="text" class="popover-input" id="popover-detail-text" value="${detailVal.replace(/"/g, '&quot;')}" placeholder="${placeholderText}">
+            const options = [
+                { val: '✓', label: '✓ Telah Dilakukan', class: 'status-good', icon: 'fa-circle-check' },
+                { val: '', label: '-- Belum Dilakukan', class: 'status-empty', icon: 'fa-circle-xmark' }
+            ];
+            
+            bodyHtml += `<div class="popover-sholat-grid" style="grid-template-columns: 1fr; gap: 8px; margin-bottom: 8px;">`;
+            options.forEach(opt => {
+                const isActive = (opt.val === '✓' && isChecked) || (opt.val === '' && !isChecked) ? 'active' : '';
+                bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
+            });
+            bodyHtml += `</div>`;
+            
+            bodyHtml += `<div id="popover-detail-wrapper" style="margin-top: 8px;">
+                <input type="text" class="popover-input" id="popover-detail-text" value="${detailVal.replace(/"/g, '&quot;')}" placeholder="${placeholderText}" style="width: 100%; box-sizing: border-box;">
             </div>`;
             
             popoverBodyContent.innerHTML = bodyHtml;
             
-            const cb = document.getElementById('popover-check');
-            const wrapper = document.getElementById('popover-detail-wrapper');
             const detailText = document.getElementById('popover-detail-text');
+            let popoverStatus = isChecked ? '✓' : '';
             
             function triggerDetailsSave() {
                 let finalValue = '';
-                if (cb.checked) {
+                if (popoverStatus === '✓') {
                     const text = detailText.value.trim();
                     finalValue = text ? `✓ (${text})` : '✓';
                 }
-                saveCellData(dateStr, key, finalValue, cell);
+                saveCellData(dateStr, key, finalValue, cell, false);
             }
             
-            cb.addEventListener('change', function() {
-                wrapper.style.display = this.checked ? 'block' : 'none';
-                triggerDetailsSave();
+            popoverBodyContent.querySelectorAll('.popover-toggle-btn').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    popoverBodyContent.querySelectorAll('.popover-toggle-btn').forEach(b => b.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    popoverStatus = this.dataset.value;
+                    triggerDetailsSave();
+                    
+                    showToast(`Status ${categoryName} > ${labelName} berhasil diubah!`, 'success');
+                });
             });
             
             detailText.addEventListener('input', triggerDetailsSave);
@@ -4311,7 +4551,7 @@ document.addEventListener('DOMContentLoaded', function() {
         cell.innerHTML = displayVal;
     }
 
-    function saveCellData(dateStr, key, value, originalCell) {
+    function saveCellData(dateStr, key, value, originalCell, shouldClose = true) {
         const day = originalCell.dataset.day;
         // Cari elemen sel yang baru jika DOM tabel telah dibangun ulang
         const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`) || originalCell;
@@ -4387,7 +4627,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         updateTableCellVisually(cell, key, value);
 
-        closePopover();
+        if (shouldClose) {
+            closePopover();
+        }
 
         checkForChanges();
 
@@ -4431,6 +4673,31 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     if (monthNextBtn) {
         monthNextBtn.addEventListener('click', () => navigateMonth(1));
+    }
+
+    // --- NAVIGASI TANGGAL/BULAN LEWAT KALENDER BAWAAN (DATEPICKER) ---
+    const monthTitle = document.getElementById('month-title');
+    const nativeDatepicker = document.getElementById('native-datepicker');
+
+    if (monthTitle && nativeDatepicker) {
+        monthTitle.addEventListener('click', function() {
+            // Set nilai datepicker agar sesuai dengan tanggal aktif saat ini
+            nativeDatepicker.value = tanggalInput.value;
+            // Panggil picker bawaan browser secara programmatis
+            if (typeof nativeDatepicker.showPicker === 'function') {
+                nativeDatepicker.showPicker();
+            } else {
+                nativeDatepicker.click(); // Fallback untuk browser lawas
+            }
+        });
+
+        nativeDatepicker.addEventListener('change', function() {
+            const selectedDate = this.value; // yyyy-mm-dd
+            if (selectedDate) {
+                tanggalInput.value = selectedDate;
+                tanggalInput.dispatchEvent(new Event('change'));
+            }
+        });
     }
 
     // Initial load

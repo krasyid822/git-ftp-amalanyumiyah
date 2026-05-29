@@ -13,7 +13,7 @@ if (!defined('SHORTCUT_CSS_INCLUDED')) {
         display: inline-flex;
         align-items: center;
         gap: 4px;
-        margin-left: 12px;
+        margin-left: 4px;
         color: var(--md-sys-color-primary);
         text-decoration: none;
         font-size: 0.75rem;
@@ -21,7 +21,7 @@ if (!defined('SHORTCUT_CSS_INCLUDED')) {
         vertical-align: middle;
         opacity: 0.7;
         transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
-        padding: 4px 8px;
+        padding: 2px 6px;
         border-radius: var(--md-sys-shape-corner-small);
     }
     .legend-shortcut:hover {
@@ -37,20 +37,26 @@ HTML;
  * @param string $section Nama seksi (cth: 'SHOLAT WAJIB').
  * @return string HTML tag <a> atau string kosong.
  */
-function generate_shortcut_link($section) {
+function generate_shortcut_link($section, $key = '') {
     $url = '';
     $tooltip = '';
 
     switch ($section) {
         case 'SHOLAT WAJIB':
-            $url = 'https://proyek-jadwal-sholat.vercel.app/';
+            $url = 'https://al-waqt-9cdb7.web.app/';
             /* $url = 'https://krasyid822.github.io/sholatPWA'; */
             $tooltip = 'Buka panduan Sholat Wajib';
             break;
 
         case 'ALMATSURAT':
-            $url = 'https://krasyid822.github.io/AlMatsurat';
-            $tooltip = 'Buka panduan Al-Ma\'tsurat';
+            $action = ($key === 'almatsurat_petang') ? 'sore' : 'pagi';
+            $url = "https://krasyid822.github.io/AlMatsurat?action={$action}";
+            $tooltip = "Buka panduan Al-Ma'tsurat " . ($action === 'pagi' ? 'Pagi' : 'Sore');
+            break;
+
+        case 'TILAWAH':
+            $url = 'https://quran.com/';
+            $tooltip = 'Buka Quran.com';
             break;
 
         case 'ISTIGHFAR':

@@ -149,7 +149,7 @@ class AyyamulBidhCalculator {
     /**
      * Konversi Hijriyah ke Gregorian (pendekatan)
      */
-    private function getGregorianFromHijri($hy, $hm, $hd) {
+    public function getGregorianFromHijri($hy, $hm, $hd) {
         // Ini adalah pendekatan sederhana, untuk implementasi lebih akurat
         // sebaiknya menggunakan library khusus atau API
         $jd = (int)((11 * $hy + 3) / 30) + (int)(354 * $hy) + (int)(30 * $hm) - (int)(($hm - 1) / 2) + $hd + 1948440 - 385 - $this->adjustment;

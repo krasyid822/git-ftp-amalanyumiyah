@@ -34,3 +34,4 @@ buat layout penginputan lebih nyaman dengan membuat semuanya muat disatu layar, 
 
 pecah kode menggunakan riverpod style?
 
+pecah kode berdasarkan fungsi, satu kode satu fungsi
