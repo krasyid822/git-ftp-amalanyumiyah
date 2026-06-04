@@ -140,50 +140,54 @@ if (isset($_POST['is_ajax'])) {
 // --- FUNGSI BARU UNTUK MENGGUNAKAN CLASS PERHITUNGAN ---
 function getAyyamulBidhInfoFromClass($date = null) {
     require_once __DIR__ . '/AyamulBidhCalc.php';
-    $calculator = new AyyamulBidhCalculator();
-    $calculator->setAdjustment(0);
     
     // Gunakan tanggal yang diberikan atau tanggal hari ini jika null
     $currentDate = $date ?? new DateTime();
-    $bidhData = $calculator->getAyyamulBidhDates($currentDate);
+    $year = $currentDate->format('Y');
+    $month = $currentDate->format('m');
+    $daysInMonth = (int)$currentDate->format('t');
     
     $jadwal_puasa_final = [];
     $raw_dates = [];
-    if (empty($bidhData['error']) && !empty($bidhData['dates'])) {
-        foreach ($bidhData['dates'] as $dateInfo) {
-            $jadwal_puasa_final[] = $dateInfo['formatted'];
-            if ($dateInfo['gregorian'] instanceof DateTime) {
-                $raw_dates[] = $dateInfo['gregorian']->format('Y-m-d');
-            }
-        }
-    } else if (!empty($bidhData['error'])) {
-         $jadwal_puasa_final = [$bidhData['error']];
-    }
-
-    // Hitung Hari Tasyrik & Hari Raya untuk tahun Hijriyah saat ini
     $tasyrik_dates = [];
-    $currentHijri = $calculator->gregorianToHijri($currentDate);
-    if (!empty($currentHijri['year'])) {
-        $hy = $currentHijri['year'];
-        // Idul Adha (10 Dzulhijjah) & Hari Tasyrik (11, 12, 13 Dzulhijjah)
-        for ($d = 10; $d <= 13; $d++) {
-            $gregDate = $calculator->getGregorianFromHijri($hy, 12, $d);
-            if ($gregDate) {
-                $tasyrik_dates[] = $gregDate->format('Y-m-d');
-            }
+    
+    // Scan seluruh hari di bulan Masehi ini untuk memetakan Ayyamul Bidh & Hari Raya/Tasyrik
+    for ($d = 1; $d <= $daysInMonth; $d++) {
+        $dateStr = sprintf('%s-%s-%02d', $year, $month, $d);
+        
+        // Cek Ayyamul Bidh
+        if (bi_is_ayyamul_bidh($dateStr)) {
+            $raw_dates[] = $dateStr;
+            
+            // Format tanggal untuk tampilan modal
+            $dObj = new DateTime($dateStr);
+            $dayName = $dObj->format('l');
+            $monthName = $dObj->format('F');
+            
+            $daysIndo = ['Sunday' => 'Minggu', 'Monday' => 'Senin', 'Tuesday' => 'Selasa', 'Wednesday' => 'Rabu', 'Thursday' => 'Kamis', 'Friday' => 'Jumat', 'Saturday' => 'Sabtu'];
+            $monthsIndo = ['January' => 'Januari', 'February' => 'Februari', 'March' => 'Maret', 'April' => 'April', 'May' => 'Mei', 'June' => 'Juni', 'July' => 'Juli', 'August' => 'Agustus', 'September' => 'September', 'October' => 'Oktober', 'November' => 'November', 'December' => 'Desember'];
+            
+            $dayIndo = $daysIndo[$dayName] ?? $dayName;
+            $monthIndo = $monthsIndo[$monthName] ?? $monthName;
+            
+            $jadwal_puasa_final[] = sprintf('%s, %d %s %s', $dayIndo, $d, $monthIndo, $year);
         }
-        // Idul Fitri (1 Shawwal)
-        $eid_fitr = $calculator->getGregorianFromHijri($hy, 10, 1);
-        if ($eid_fitr) {
-            $tasyrik_dates[] = $eid_fitr->format('Y-m-d');
+        
+        // Cek Hari Raya/Tasyrik
+        if (bi_is_tasyrik($dateStr)) {
+            $tasyrik_dates[] = $dateStr;
         }
+    }
+    
+    if (empty($jadwal_puasa_final)) {
+        $jadwal_puasa_final = ["Tidak ada jadwal puasa Ayyamul Bidh di bulan ini."];
     }
 
     return [
         'title'       => 'Puasa Ayyamul Bidh (Puasa Hari-hari Putih)',
         'description' => 'Puasa sunnah yang dilaksanakan pada tanggal 13, 14, dan 15 setiap bulan Hijriah. Disebut hari-hari putih karena pada malam-malam tersebut, bulan bersinar terang menyinari bumi.',
         'hadith'      => 'Dari Abu Dzar, Rasulullah shallallahu ‘alaihi wa sallam bersabda padanya, “Jika engkau ingin berpuasa tiga hari setiap bulannya, maka berpuasalah pada tanggal 13, 14, dan 15 (dari bulan Hijriyah).” (HR. Tirmidzi dan An Nasa’i)',
-        'dates_title' => 'Perkiraan Jadwal Bulan Ini (' . ($bidhData['current_hijri_month'] ?? '') . ' ' . ($bidhData['current_hijri_year'] ?? '') . '):',
+        'dates_title' => 'Perkiraan Jadwal Bulan Ini:',
         'dates'       => $jadwal_puasa_final,
         'raw_dates'   => $raw_dates,
         'tasyrik_dates' => $tasyrik_dates,
