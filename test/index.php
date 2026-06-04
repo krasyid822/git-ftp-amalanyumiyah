@@ -208,7 +208,7 @@ function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
         'dates'       => $jadwal_puasa_final,
         'raw_dates'   => $raw_dates,
         'tasyrik_dates' => $tasyrik_dates,
-        'disclaimer'  => 'Perhitungan ini menggunakan algoritma internal dan akurasinya bisa berbeda satu hari, tergantung metode penentuan awal bulan (rukyat/hisab) di wilayah Anda.'
+        'disclaimer'  => 'Perhitungan Hijriah bersumber dari API <a href="https://al-waqt-9cdb7.web.app/" target="_blank" style="color: var(--md-sys-color-primary); font-weight: bold; text-decoration: underline;">Al-Waqt</a>. Akurasi bisa berbeda satu hari tergantung ketetapan wilayah Anda.'
     ];
 }
 
@@ -3428,7 +3428,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('modal_desc').textContent = ayyamulBidhInfo.description;
         document.getElementById('modal_hadith').textContent = ayyamulBidhInfo.hadith;
         document.getElementById('modal_dates_title').textContent = ayyamulBidhInfo.dates_title;
-        document.getElementById('modal_disclaimer').textContent = ayyamulBidhInfo.disclaimer;
+        document.getElementById('modal_disclaimer').innerHTML = ayyamulBidhInfo.disclaimer;
         
         // Set adjustment dropdown value
         if (adjustmentSelect && semuaDataAmalan.config) {

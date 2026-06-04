@@ -30,42 +30,74 @@ class AyyamulBidhCalculator {
     ];
 
     /**
-     * Konversi Gregorian ke Hijriyah menggunakan algoritma Kuwaiti
+     * Konversi Gregorian ke Hijriyah menggunakan API dengan local caching dan fallback ke algoritma lokal
      */
     public function gregorianToHijri($date) {
-        // PERBAIKAN: Menambahkan ')' sebelum '{'
-        if (version_compare(PHP_VERSION, '8.0.0')) {
-            return $this->gregorianToHijriModern($date);
+        $dateTime = ($date instanceof DateTime) ? $date : new DateTime($date);
+        $dateStr = $dateTime->format('Y-m-d');
+        
+        $apiResult = $this->fetchHijriFromApi($dateStr, $this->adjustment);
+        if ($apiResult) {
+            return $apiResult;
         }
-        return $this->gregorianToHijriLegacy($date);
+        
+        return $this->gregorianToHijriLegacy($dateTime);
     }
 
-    private function gregorianToHijriModern($date) {
-        $gy = $date->format('Y');
-        $gm = $date->format('n');
-        $gd = $date->format('j');
-
-        $jd = $this->gregorianToJulian($gy, $gm, $gd) + $this->adjustment;
-        $l = $jd - 1948440 + 10632;
-        $n = (int)(($l - 1) / 10631);
-        $l = $l - 10631 * $n + 354;
-        $j = ((int)((10985 - $l) / 5316)) * ((int)((50 * $l) / 17719)) + ((int)($l / 5670)) * ((int)((43 * $l) / 15238));
-        $l = $l - ((int)((30 - $j) / 15)) * ((int)((17719 * $j) / 50)) - ((int)($j / 16)) * ((int)((15238 * $j) / 43)) + 29;
-        $m = (int)((24 * $l) / 709);
-        $d = $l - (int)((709 * $m) / 24);
-        $y = 30 * $n + $j - 30;
-
-        return [
-            'year' => $y,
-            'month' => $m,
-            'day' => $d,
-            'month_name' => $this->hijriMonths[$m] ?? 'Unknown'
-        ];
+    /**
+     * Helper to fetch Hijri date from API with file caching
+     */
+    private function fetchHijriFromApi($dateStr, $offset) {
+        $cacheFile = __DIR__ . '/hijri_cache.json';
+        $cacheKey = $dateStr . '_' . $offset;
+        
+        $cache = [];
+        if (file_exists($cacheFile)) {
+            $data = @file_get_contents($cacheFile);
+            if ($data) {
+                $cache = json_decode($data, true) ?: [];
+            }
+        }
+        
+        if (isset($cache[$cacheKey])) {
+            return $cache[$cacheKey];
+        }
+        
+        $url = 'https://us-central1-al-waqt-9cdb7.cloudfunctions.net/getHijriCalendar?' . http_build_query([
+            'date' => $dateStr,
+            'method' => 'kemenag',
+            'offset' => $offset
+        ]);
+        
+        $ctx = stream_context_create([
+            'http' => [
+                'timeout' => 5,
+                'header' => "User-Agent: PHP-AyyamulBidhCalculator\r\n"
+            ]
+        ]);
+        
+        $responseJson = @file_get_contents($url, false, $ctx);
+        if ($responseJson) {
+            $response = json_decode($responseJson, true);
+            if ($response && !empty($response['success']) && !empty($response['hijri'])) {
+                $hijri = $response['hijri'];
+                $result = [
+                    'year' => (int)$hijri['year'],
+                    'month' => (int)$hijri['month'],
+                    'day' => (int)$hijri['day'],
+                    'month_name' => $this->hijriMonths[(int)$hijri['month']] ?? $hijri['monthName']
+                ];
+                
+                $cache[$cacheKey] = $result;
+                @file_put_contents($cacheFile, json_encode($cache, JSON_PRETTY_PRINT));
+                return $result;
+            }
+        }
+        
+        return null;
     }
 
     private function gregorianToHijriLegacy($date) {
-        // Catatan: strtotime($date) akan gagal jika $date adalah objek DateTime
-        // Sebaiknya konsisten menggunakan objek DateTime
         $gy = ($date instanceof DateTime) ? $date->format('Y') : date('Y', strtotime($date));
         $gm = ($date instanceof DateTime) ? $date->format('n') : date('n', strtotime($date));
         $gd = ($date instanceof DateTime) ? $date->format('j') : date('j', strtotime($date));
@@ -147,14 +179,13 @@ class AyyamulBidhCalculator {
     }
 
     /**
-     * Konversi Hijriyah ke Gregorian (pendekatan)
+     * Konversi Hijriyah ke Gregorian menggunakan pencarian rentang (±3 hari) berbasis API
      */
     public function getGregorianFromHijri($hy, $hm, $hd) {
-        // Ini adalah pendekatan sederhana, untuk implementasi lebih akurat
-        // sebaiknya menggunakan library khusus atau API
-        $jd = (int)((11 * $hy + 3) / 30) + (int)(354 * $hy) + (int)(30 * $hm) - (int)(($hm - 1) / 2) + $hd + 1948440 - 385 - $this->adjustment;
+        // 1. Dapatkan perkiraan tanggal menggunakan kalkulasi tabular lokal
+        $approxJd = (int)((11 * $hy + 3) / 30) + (int)(354 * $hy) + (int)(30 * $hm) - (int)(($hm - 1) / 2) + $hd + 1948440 - 385 - $this->adjustment;
         
-        $l = $jd + 68569;
+        $l = $approxJd + 68569;
         $n = (int)((4 * $l) / 146097);
         $l = $l - (int)((146097 * $n + 3) / 4);
         $i = (int)((4000 * ($l + 1)) / 1461001);
@@ -165,9 +196,26 @@ class AyyamulBidhCalculator {
         $m = $j + 2 - 12 * $l;
         $y = 100 * ($n - 49) + $i + $l;
         
-        // Menambahkan setTime(0, 0) untuk menghindari masalah timezone
-        $date = DateTime::createFromFormat('Y-n-j', "$y-$m-$d");
-        return $date ? $date->setTime(0, 0) : false;
+        $approxDate = DateTime::createFromFormat('Y-n-j', "$y-$m-$d");
+        if (!$approxDate) {
+            return false;
+        }
+        $approxDate->setTime(0, 0);
+        
+        // 2. Scan dalam rentang ±3 hari di sekitar perkiraan awal untuk kecocokan presisi via API
+        for ($offsetDays = -3; $offsetDays <= 3; $offsetDays++) {
+            $candidateDate = clone $approxDate;
+            if ($offsetDays != 0) {
+                $candidateDate->modify("$offsetDays days");
+            }
+            
+            $hijri = $this->gregorianToHijri($candidateDate);
+            if ($hijri && $hijri['year'] == $hy && $hijri['month'] == $hm && $hijri['day'] == $hd) {
+                return $candidateDate;
+            }
+        }
+        
+        return $approxDate;
     }
 }
 ?>
