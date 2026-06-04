@@ -81,31 +81,10 @@ if (isset($_POST['is_ajax'])) {
     // --- B. AJAX UNTUK MENGAMBIL INFO AYYAMUL BIDH ---
     if ($_POST['is_ajax'] === 'get_ayyamul_bidh' && isset($_POST['tanggal'])) {
         $selectedDate = new DateTime($_POST['tanggal']);
-        $dataAmalan = bacaDataAmalan($dataFile);
-        $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
-        $response = getAyyamulBidhInfoFromClass($selectedDate, $adj);
+        $response = getAyyamulBidhInfoFromClass($selectedDate);
     }
 
-    // --- D. AJAX UNTUK MENYIMPAN KALIBRASI HIJRIYAH ---
-    if ($_POST['is_ajax'] === 'save_calibration' && isset($_POST['adjustment'])) {
-        $adjustment = (int)$_POST['adjustment'];
-        $dataAmalan = bacaDataAmalan($dataFile);
-        if (!is_array($dataAmalan)) {
-            $dataAmalan = [];
-        }
-        $dataAmalan['config']['hijri_adjustment'] = $adjustment;
-        simpanDataAmalan($dataFile, $dataAmalan);
-        
-        $tanggal = $_POST['tanggal'] ?? date('Y-m-d');
-        $response = [
-            'status' => 'success',
-            'message' => "Kalibrasi kalender Hijriyah berhasil diperbarui!",
-            'updated_data' => bacaDataAmalan($dataFile),
-            'ayyamul_bidh_info' => getAyyamulBidhInfoFromClass(new DateTime($tanggal), $adjustment)
-        ];
-        echo json_encode($response);
-        exit;
-    }
+
 
     // --- C. AJAX UNTUK MENYIMPAN SATU SEL TERTENTU ---
     if ($_POST['is_ajax'] === 'save_single_cell' && isset($_POST['tanggal']) && isset($_POST['key'])) {
@@ -159,10 +138,10 @@ if (isset($_POST['is_ajax'])) {
 
 
 // --- FUNGSI BARU UNTUK MENGGUNAKAN CLASS PERHITUNGAN ---
-function getAyyamulBidhInfoFromClass($date = null, $adjustment = 0) {
+function getAyyamulBidhInfoFromClass($date = null) {
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
-    $calculator->setAdjustment($adjustment);
+    $calculator->setAdjustment(0);
     
     // Gunakan tanggal yang diberikan atau tanggal hari ini jika null
     $currentDate = $date ?? new DateTime();
@@ -222,10 +201,7 @@ function bi_is_tasyrik($dateStr) {
     global $dataFile;
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
-    
-    $dataAmalan = bacaDataAmalan($dataFile);
-    $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
-    $calculator->setAdjustment($adj);
+    $calculator->setAdjustment(0);
     
     $date = new DateTime($dateStr);
     $hijri = $calculator->gregorianToHijri($date);
@@ -247,10 +223,7 @@ function bi_is_ayyamul_bidh($dateStr) {
     global $dataFile;
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
-    
-    $dataAmalan = bacaDataAmalan($dataFile);
-    $adj = $dataAmalan['config']['hijri_adjustment'] ?? 0;
-    $calculator->setAdjustment($adj);
+    $calculator->setAdjustment(0);
     
     $date = new DateTime($dateStr);
     $hijri = $calculator->gregorianToHijri($date);
@@ -263,10 +236,7 @@ function bi_is_ayyamul_bidh($dateStr) {
     return ($hijri['day'] == 13 || $hijri['day'] == 14 || $hijri['day'] == 15);
 }
 
-// Panggil fungsi untuk mendapatkan data dinamis SAAT HALAMAN PERTAMA KALI DIMUAT
-$dataAmalanInit = bacaDataAmalan($dataFile);
-$adjInit = $dataAmalanInit['config']['hijri_adjustment'] ?? 0;
-$ayyamul_bidh_info = getAyyamulBidhInfoFromClass(null, $adjInit);
+$ayyamul_bidh_info = getAyyamulBidhInfoFromClass(null);
 
 
 // --- STRUKTUR DATA AMALAN ---
@@ -3066,32 +3036,6 @@ if (isset($manifestPath)) {
         <ul id="modal_dates_list"></ul>
         <p class="disclaimer" id="modal_disclaimer"></p>
         
-        <!-- Kalibrasi Kalender Hijriyah (Collapsed by Default) -->
-        <details style="margin-top: 20px; border-top: 1px solid var(--md-sys-color-outline-variant); padding-top: 16px;" class="hijri-calibration-details">
-            <summary style="font-weight: 700; font-size: 0.875rem; display: flex; align-items: center; justify-content: space-between; cursor: pointer; color: var(--md-sys-color-primary); list-style: none; user-select: none; outline: none;">
-                <span style="display: flex; align-items: center; gap: 8px;">
-                    <i class="fa-solid fa-gears"></i> Kalibrasi Tanggal Hijriyah
-                </span>
-                <span class="details-chevron" style="transition: transform 0.2s ease;"><i class="fa-solid fa-chevron-down" style="font-size: 0.75rem;"></i></span>
-            </summary>
-            <div style="margin-top: 12px; display: flex; flex-direction: column; gap: 8px;">
-                <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
-                    <select id="hijri-adjustment-select" style="padding: 8px 12px; font-size: 0.875rem; border-radius: 4px; border: 1px solid var(--md-sys-color-outline-variant); background: #fff; width: auto; box-shadow: none; display: inline-block;">
-                        <option value="-2">-2 Hari</option>
-                        <option value="-1">-1 Hari</option>
-                        <option value="0" selected>0 Hari (Default)</option>
-                        <option value="1">+1 Hari</option>
-                        <option value="2">+2 Hari</option>
-                    </select>
-                    <button type="button" id="save-calibration-btn" class="popover-save-btn" style="margin-top: 0; padding: 8px 16px; font-size: 0.85rem; width: auto; display: inline-flex; align-items: center; gap: 8px; height: 38px;">
-                        <i class="fa-solid fa-floppy-disk"></i> Terapkan
-                    </button>
-                </div>
-                <small style="font-size: 0.725rem; color: var(--md-sys-color-on-surface-variant); display: block; line-height: 1.3;">
-                    Gunakan fitur ini untuk mencocokkan awal bulan Hijriyah jika jadwal Ayyamul Bidh berbeda 1 atau 2 hari dengan ketetapan kalender lokal Anda.
-                </small>
-            </div>
-        </details>
     </div>
 </div>
 
@@ -3420,8 +3364,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // --- AYYAMUL BIDH MODAL LOGIC ---
     const modal = document.getElementById('ayamul_bidh_modal');
     const closeModalBtn = modal.querySelector('.modal-close-btn');
-    const adjustmentSelect = document.getElementById('hijri-adjustment-select');
-    const saveCalibrationBtn = document.getElementById('save-calibration-btn');
 
     window.openAyyamulBidhModal = function() {
         document.getElementById('modal_title').textContent = ayyamulBidhInfo.title;
@@ -3430,12 +3372,7 @@ document.addEventListener('DOMContentLoaded', function() {
         document.getElementById('modal_dates_title').textContent = ayyamulBidhInfo.dates_title;
         document.getElementById('modal_disclaimer').innerHTML = ayyamulBidhInfo.disclaimer;
         
-        // Set adjustment dropdown value
-        if (adjustmentSelect && semuaDataAmalan.config) {
-            adjustmentSelect.value = semuaDataAmalan.config.hijri_adjustment !== undefined ? semuaDataAmalan.config.hijri_adjustment : 0;
-        } else if (adjustmentSelect) {
-            adjustmentSelect.value = 0;
-        }
+
 
         const list = document.getElementById('modal_dates_list');
         list.innerHTML = '';
@@ -3453,56 +3390,7 @@ document.addEventListener('DOMContentLoaded', function() {
         modal.classList.add('active');
     };
 
-    if (saveCalibrationBtn) {
-        saveCalibrationBtn.addEventListener('click', function() {
-            const selectVal = document.getElementById('hijri-adjustment-select').value;
-            const originalText = this.innerHTML;
-            this.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>...';
-            this.disabled = true;
-            
-            const formData = new FormData();
-            formData.append('is_ajax', 'save_calibration');
-            formData.append('adjustment', selectVal);
-            formData.append('tanggal', tanggalInput.value);
-            
-            fetch('', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    showToast(data.message, 'success');
-                    semuaDataAmalan = data.updated_data;
-                    ayyamulBidhInfo = data.ayyamul_bidh_info;
-                    
-                    // Rebuild dates list in modal
-                    const list = document.getElementById('modal_dates_list');
-                    list.innerHTML = '';
-                    if (ayyamulBidhInfo.dates && ayyamulBidhInfo.dates.length > 0) {
-                        ayyamulBidhInfo.dates.forEach(dateStr => {
-                            const li = document.createElement('li');
-                            li.textContent = dateStr;
-                            list.appendChild(li);
-                        });
-                    }
-                    
-                    // Refresh table and checkboxes
-                    updateFormForDate(tanggalInput.value);
-                } else {
-                    showToast('Gagal memperbarui kalibrasi.', 'error');
-                }
-            })
-            .catch(err => {
-                showToast('Gagal terhubung ke server.', 'error');
-                console.error(err);
-            })
-            .finally(() => {
-                this.innerHTML = originalText;
-                this.disabled = false;
-            });
-        });
-    }
+
 
     const closeModal = () => modal.classList.remove('active');
     closeModalBtn.addEventListener('click', closeModal);
