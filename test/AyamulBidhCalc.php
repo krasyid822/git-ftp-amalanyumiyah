@@ -77,6 +77,12 @@ class AyyamulBidhCalculator {
         ]);
         
         $responseJson = @file_get_contents($url, false, $ctx);
+        if (!$responseJson) {
+            // Fallback to system curl if php stream wrapper for https is not enabled
+            $escapedUrl = escapeshellarg($url);
+            $responseJson = @shell_exec("curl -s -m 5 $escapedUrl");
+        }
+        
         if ($responseJson) {
             $response = json_decode($responseJson, true);
             if ($response && !empty($response['success']) && !empty($response['hijri'])) {
@@ -85,7 +91,7 @@ class AyyamulBidhCalculator {
                     'year' => (int)$hijri['year'],
                     'month' => (int)$hijri['month'],
                     'day' => (int)$hijri['day'],
-                    'month_name' => $this->hijriMonths[(int)$hijri['month']] ?? $hijri['monthName']
+                    'month_name' => $this->hijriMonths[(int)$hijri['month']] ?? ($hijri['monthName'] ?? '')
                 ];
                 
                 $cache[$cacheKey] = $result;
@@ -97,7 +103,7 @@ class AyyamulBidhCalculator {
         return null;
     }
 
-    private function gregorianToHijriLegacy($date) {
+    public function gregorianToHijriLegacy($date) {
         $gy = ($date instanceof DateTime) ? $date->format('Y') : date('Y', strtotime($date));
         $gm = ($date instanceof DateTime) ? $date->format('n') : date('n', strtotime($date));
         $gd = ($date instanceof DateTime) ? $date->format('j') : date('j', strtotime($date));
@@ -113,9 +119,9 @@ class AyyamulBidhCalculator {
         $y = 30 * $n + $j - 30;
 
         return [
-            'year' => $y,
-            'month' => $m,
-            'day' => $d,
+            'year' => (int)$y,
+            'month' => (int)$m,
+            'day' => (int)$d,
             'month_name' => $this->hijriMonths[$m] ?? 'Unknown'
         ];
     }

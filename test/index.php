@@ -202,12 +202,21 @@ function bi_is_senin_kamis($dateStr) {
 }
 
 function bi_is_tasyrik($dateStr) {
-    global $dataFile;
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
     $calculator->setAdjustment(0);
     
     $date = new DateTime($dateStr);
+    
+    // Pre-check lokal secara cepat untuk menyaring tanggal yang tidak mungkin
+    $localHijri = $calculator->gregorianToHijriLegacy($date);
+    $isDzulhijjahCandidate = ($localHijri['month'] == 12 && $localHijri['day'] >= 8 && $localHijri['day'] <= 15);
+    $isShawwalCandidate = ($localHijri['month'] == 10 && ($localHijri['day'] >= 29 || $localHijri['day'] <= 3));
+    
+    if (!$isDzulhijjahCandidate && !$isShawwalCandidate) {
+        return false;
+    }
+    
     $hijri = $calculator->gregorianToHijri($date);
     
     // Idul Adha (10 Dzulhijjah) & Hari Tasyrik (11, 12, 13 Dzulhijjah)
@@ -224,12 +233,21 @@ function bi_is_tasyrik($dateStr) {
 }
 
 function bi_is_ayyamul_bidh($dateStr) {
-    global $dataFile;
     require_once __DIR__ . '/AyamulBidhCalc.php';
     $calculator = new AyyamulBidhCalculator();
     $calculator->setAdjustment(0);
     
     $date = new DateTime($dateStr);
+    
+    // Pre-check lokal secara cepat untuk menyaring tanggal yang tidak mungkin
+    $localHijri = $calculator->gregorianToHijriLegacy($date);
+    if ($localHijri['month'] == 12) {
+        return false;
+    }
+    if ($localHijri['day'] < 11 || $localHijri['day'] > 17) {
+        return false;
+    }
+    
     $hijri = $calculator->gregorianToHijri($date);
     
     // Pastikan bukan bulan Dzulhijjah (12)
