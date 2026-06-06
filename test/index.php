@@ -28,46 +28,86 @@ if (isset($_POST['is_ajax'])) {
         $rawatib_details_ajax = json_decode($_POST['rawatib_details_structure'], true);
         
         $dataAmalan = bacaDataAmalan($dataFile);
+        if (!isset($dataAmalan['__metadata'])) $dataAmalan['__metadata'] = [];
+        if (!isset($dataAmalan['__metadata']['timestamps'])) $dataAmalan['__metadata']['timestamps'] = [];
+        if (!isset($dataAmalan['__metadata']['timestamps'][$tanggal])) $dataAmalan['__metadata']['timestamps'][$tanggal] = [];
+        $nowStr = date('Y-m-d H:i:s');
 
         // Proses semua amalan standar
         foreach ($daftar_amalan_ajax as $kategori) {
             foreach ($kategori as $key => $label) {
-                $dataAmalan[$bulan][$key][$hari] = $_POST[$key] ?? '';
+                $oldVal = $dataAmalan[$bulan][$key][$hari] ?? '';
+                $newVal = $_POST[$key] ?? '';
+                $dataAmalan[$bulan][$key][$hari] = $newVal;
+                if ($oldVal !== $newVal) {
+                    $dataAmalan['__metadata']['timestamps'][$tanggal][$key] = $nowStr;
+                }
             }
         }
         
         // Proses detail
-        if (!empty($_POST['sedekah']) && !empty($_POST['sedekah_detail'])) $dataAmalan[$bulan]['sedekah'][$hari] = '✓ (' . trim($_POST['sedekah_detail']) . ')';
-        if (!empty($_POST['almatsurat_pagi']) && !empty($_POST['almatsurat_pagi_detail'])) $dataAmalan[$bulan]['almatsurat_pagi'][$hari] = '✓ (' . trim($_POST['almatsurat_pagi_detail']) . ')';
-        if (!empty($_POST['almatsurat_petang']) && !empty($_POST['almatsurat_petang_detail'])) $dataAmalan[$bulan]['almatsurat_petang'][$hari] = '✓ (' . trim($_POST['almatsurat_petang_detail']) . ')';
+        if (!empty($_POST['sedekah']) && !empty($_POST['sedekah_detail'])) {
+            $val = '✓ (' . trim($_POST['sedekah_detail']) . ')';
+            if (($dataAmalan[$bulan]['sedekah'][$hari] ?? '') !== $val) {
+                $dataAmalan[$bulan]['sedekah'][$hari] = $val;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['sedekah'] = $nowStr;
+            }
+        }
+        if (!empty($_POST['almatsurat_pagi']) && !empty($_POST['almatsurat_pagi_detail'])) {
+            $val = '✓ (' . trim($_POST['almatsurat_pagi_detail']) . ')';
+            if (($dataAmalan[$bulan]['almatsurat_pagi'][$hari] ?? '') !== $val) {
+                $dataAmalan[$bulan]['almatsurat_pagi'][$hari] = $val;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['almatsurat_pagi'] = $nowStr;
+            }
+        }
+        if (!empty($_POST['almatsurat_petang']) && !empty($_POST['almatsurat_petang_detail'])) {
+            $val = '✓ (' . trim($_POST['almatsurat_petang_detail']) . ')';
+            if (($dataAmalan[$bulan]['almatsurat_petang'][$hari] ?? '') !== $val) {
+                $dataAmalan[$bulan]['almatsurat_petang'][$hari] = $val;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['almatsurat_petang'] = $nowStr;
+            }
+        }
         
         // Proses Tilawah
+        $tilawah_val = '';
         if (!empty($_POST['tilawah_surat'])) {
             $tilawah_text = trim($_POST['tilawah_surat']);
             if(!empty($_POST['tilawah_ayat_mulai'])) {
                 $tilawah_text .= ' ' . trim($_POST['tilawah_ayat_mulai']);
                 if(!empty($_POST['tilawah_ayat_selesai'])) $tilawah_text .= '-' . trim($_POST['tilawah_ayat_selesai']);
             }
-            $dataAmalan[$bulan]['tilawah'][$hari] = bi_normalize_tilawah_text($tilawah_text);
-        } else {
-            $dataAmalan[$bulan]['tilawah'][$hari] = '';
+            $tilawah_val = bi_normalize_tilawah_text($tilawah_text);
+        }
+        if (($dataAmalan[$bulan]['tilawah'][$hari] ?? '') !== $tilawah_val) {
+            $dataAmalan[$bulan]['tilawah'][$hari] = $tilawah_val;
+            $dataAmalan['__metadata']['timestamps'][$tanggal]['tilawah'] = $nowStr;
         }
 
         // Proses Rawatib
         $rawatib_done = 0;
         foreach ($rawatib_details_ajax as $key => $label) {
-            if (!empty($_POST[$key])) {
+            $newRVal = !empty($_POST[$key]) ? '✓' : '';
+            if (($dataAmalan[$bulan][$key][$hari] ?? '') !== $newRVal) {
+                $dataAmalan[$bulan][$key][$hari] = $newRVal;
+                $dataAmalan['__metadata']['timestamps'][$tanggal][$key] = $nowStr;
+            }
+            if ($newRVal === '✓') {
                 $rawatib_done++;
-                $dataAmalan[$bulan][$key][$hari] = '✓';
-            } else {
-                $dataAmalan[$bulan][$key][$hari] = '';
             }
         }
-        $dataAmalan[$bulan]['rawatib'][$hari] = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_ajax) : '';
+        $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_ajax) : '';
+        if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+            $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+            $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
+        }
 
         // Proses Istighfar
         $istighfar_val = (int)($_POST['istighfar'] ?? 0);
-        $dataAmalan[$bulan]['istighfar'][$hari] = $istighfar_val > 0 ? $istighfar_val : '';
+        $newIVal = $istighfar_val > 0 ? $istighfar_val : '';
+        if (($dataAmalan[$bulan]['istighfar'][$hari] ?? '') !== $newIVal) {
+            $dataAmalan[$bulan]['istighfar'][$hari] = $newIVal;
+            $dataAmalan['__metadata']['timestamps'][$tanggal]['istighfar'] = $nowStr;
+        }
 
         simpanDataAmalan($dataFile, $dataAmalan);
         
@@ -84,8 +124,6 @@ if (isset($_POST['is_ajax'])) {
         $response = getAyyamulBidhInfoFromClass($selectedDate);
     }
 
-
-
     // --- C. AJAX UNTUK MENYIMPAN SATU SEL TERTENTU ---
     if ($_POST['is_ajax'] === 'save_single_cell' && isset($_POST['tanggal']) && isset($_POST['key'])) {
         $tanggal = $_POST['tanggal'];
@@ -95,6 +133,10 @@ if (isset($_POST['is_ajax'])) {
         $value = $_POST['value'] ?? '';
 
         $dataAmalan = bacaDataAmalan($dataFile);
+        if (!isset($dataAmalan['__metadata'])) $dataAmalan['__metadata'] = [];
+        if (!isset($dataAmalan['__metadata']['timestamps'])) $dataAmalan['__metadata']['timestamps'] = [];
+        if (!isset($dataAmalan['__metadata']['timestamps'][$tanggal])) $dataAmalan['__metadata']['timestamps'][$tanggal] = [];
+        $nowStr = date('Y-m-d H:i:s');
 
         // Daftar key detail rawatib
         $rawatib_details_keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
@@ -104,22 +146,36 @@ if (isset($_POST['is_ajax'])) {
             $details = json_decode($value, true);
             $rawatib_done = 0;
             foreach ($rawatib_details_keys as $rkey) {
-                if (!empty($details[$rkey])) {
+                $oldR = $dataAmalan[$bulan][$rkey][$hari] ?? '';
+                $newR = !empty($details[$rkey]) ? '✓' : '';
+                if ($oldR !== $newR) {
+                    $dataAmalan[$bulan][$rkey][$hari] = $newR;
+                    $dataAmalan['__metadata']['timestamps'][$tanggal][$rkey] = $nowStr;
+                }
+                if ($newR === '✓') {
                     $rawatib_done++;
-                    $dataAmalan[$bulan][$rkey][$hari] = '✓';
-                } else {
-                    $dataAmalan[$bulan][$rkey][$hari] = '';
                 }
             }
-            $dataAmalan[$bulan]['rawatib'][$hari] = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+            $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+            if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+                $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
+            }
         } elseif ($key === 'tilawah') {
-            $dataAmalan[$bulan]['tilawah'][$hari] = bi_normalize_tilawah_text($value);
+            $val = bi_normalize_tilawah_text($value);
+            if (($dataAmalan[$bulan]['tilawah'][$hari] ?? '') !== $val) {
+                $dataAmalan[$bulan]['tilawah'][$hari] = $val;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['tilawah'] = $nowStr;
+            }
         } else {
+            $val = $value;
             if ($key === 'istighfar') {
                 $istighfar_val = (int)$value;
-                $dataAmalan[$bulan]['istighfar'][$hari] = $istighfar_val > 0 ? $istighfar_val : '';
-            } else {
-                $dataAmalan[$bulan][$key][$hari] = $value;
+                $val = $istighfar_val > 0 ? $istighfar_val : '';
+            }
+            if (($dataAmalan[$bulan][$key][$hari] ?? '') !== $val) {
+                $dataAmalan[$bulan][$key][$hari] = $val;
+                $dataAmalan['__metadata']['timestamps'][$tanggal][$key] = $nowStr;
             }
         }
 
@@ -132,9 +188,75 @@ if (isset($_POST['is_ajax'])) {
         ];
     }
 
+    // --- D. AJAX UNTUK MENYIMPAN BANYAK SEL sekaligus (Batch Offline Sync) ---
+    if ($_POST['is_ajax'] === 'save_multiple_cells' && isset($_POST['changes'])) {
+        $changes = json_decode($_POST['changes'], true);
+        $dataAmalan = bacaDataAmalan($dataFile);
+        if (!isset($dataAmalan['__metadata'])) $dataAmalan['__metadata'] = [];
+        if (!isset($dataAmalan['__metadata']['timestamps'])) $dataAmalan['__metadata']['timestamps'] = [];
+        $nowStr = date('Y-m-d H:i:s');
+        $rawatib_details_keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+
+        foreach ($changes as $dateStr => $dayChanges) {
+            $bulan = date('Y-m', strtotime($dateStr));
+            $hari = (int)date('d', strtotime($dateStr));
+            if (!isset($dataAmalan['__metadata']['timestamps'][$dateStr])) {
+                $dataAmalan['__metadata']['timestamps'][$dateStr] = [];
+            }
+
+            foreach ($dayChanges as $key => $value) {
+                if ($key === 'rawatib') {
+                    $details = json_decode($value, true);
+                    $rawatib_done = 0;
+                    foreach ($rawatib_details_keys as $rkey) {
+                        $oldR = $dataAmalan[$bulan][$rkey][$hari] ?? '';
+                        $newR = !empty($details[$rkey]) ? '✓' : '';
+                        if ($oldR !== $newR) {
+                            $dataAmalan[$bulan][$rkey][$hari] = $newR;
+                            $dataAmalan['__metadata']['timestamps'][$dateStr][$rkey] = $nowStr;
+                        }
+                        if ($newR === '✓') {
+                            $rawatib_done++;
+                        }
+                    }
+                    $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+                    if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+                        $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+                        $dataAmalan['__metadata']['timestamps'][$dateStr]['rawatib'] = $nowStr;
+                    }
+                } elseif ($key === 'tilawah') {
+                    $val = bi_normalize_tilawah_text($value);
+                    if (($dataAmalan[$bulan]['tilawah'][$hari] ?? '') !== $val) {
+                        $dataAmalan[$bulan]['tilawah'][$hari] = $val;
+                        $dataAmalan['__metadata']['timestamps'][$dateStr]['tilawah'] = $nowStr;
+                    }
+                } else {
+                    $val = $value;
+                    if ($key === 'istighfar') {
+                        $istighfar_val = (int)$value;
+                        $val = $istighfar_val > 0 ? $istighfar_val : '';
+                    }
+                    if (($dataAmalan[$bulan][$key][$hari] ?? '') !== $val) {
+                        $dataAmalan[$bulan][$key][$hari] = $val;
+                        $dataAmalan['__metadata']['timestamps'][$dateStr][$key] = $nowStr;
+                    }
+                }
+            }
+        }
+
+        simpanDataAmalan($dataFile, $dataAmalan);
+
+        $response = [
+            'status' => 'success',
+            'message' => "Semua perubahan berhasil disinkronisasi!",
+            'updated_data' => bacaDataAmalan($dataFile)
+        ];
+    }
+
     echo json_encode($response);
     exit; // Hentikan eksekusi script setelah mengirim response JSON
 }
+
 
 
 // --- FUNGSI BARU UNTUK MENGGUNAKAN CLASS PERHITUNGAN ---
@@ -1782,6 +1904,7 @@ if (isset($manifestPath)) {
         .status-ok-1 { background-color: var(--color-ok-1); color: var(--color-ok-1-text); }
         .status-qadha { background-color: var(--color-qadha); color: var(--color-qadha-text); }
         .status-empty { background-color: var(--color-surface); }
+        .unsaved-local-change { box-shadow: inset 0 0 0 0.5px #BA1A1A !important; }
 
         /* --- PANEL PENJELASAN (KARTU FITUR - Material You Cards) --- */
         #penjelasan-fitur {
@@ -2991,11 +3114,22 @@ if (isset($manifestPath)) {
                                         $display_val = str_replace(['✓ (', ')'], ['✓<br><small>(', ')</small>'], $display_val);
                                     }
                                     elseif (strpos($value, 'Q (') === 0) {
-                                        if (preg_match('/Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)/', $value, $m)) {
-                                            $display_val = 'Q ' . htmlspecialchars($m[1]);
+                                        if (preg_match('/Q \((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\)/', $value, $m)) {
+                                            $exec_date = $m[1];
+                                            $exec_time = $m[2];
+                                            $cell_date = $bulan_sekarang . '-' . sprintf('%02d', $i);
+                                            if ($exec_date !== $cell_date) {
+                                                $display_val = 'Q ' . date('d/m', strtotime($exec_date)) . '<br><small>(' . htmlspecialchars($exec_time) . ')</small>';
+                                            } else {
+                                                $display_val = 'Q ' . htmlspecialchars($exec_time);
+                                            }
                                         } else {
-                                            $detail = trim(str_replace(['Q (', ')'], '', $value));
-                                            $display_val = 'Q ' . htmlspecialchars($detail);
+                                            if (preg_match('/Q \((\d{2}:\d{2})\)/', $value, $m)) {
+                                                $display_val = 'Q ' . htmlspecialchars($m[1]);
+                                            } else {
+                                                $detail = trim(str_replace(['Q (', ')'], '', $value));
+                                                $display_val = 'Q ' . htmlspecialchars($detail);
+                                            }
                                         }
                                     }
                                 }
@@ -3018,24 +3152,36 @@ if (isset($manifestPath)) {
         
         <!-- Table Legend & Shortcut Bar -->
         <div class="table-legend-bar" style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--md-sys-color-outline-variant); flex-wrap: wrap; gap: 12px;">
-            <div class="table-legend-items" style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; font-weight: 600; color: var(--md-sys-color-on-surface-variant);">
+            <div class="table-legend-items" style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 0.8rem; font-weight: 600; color: var(--md-sys-color-on-surface-variant); width: 100%;">
                 <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-good); display: inline-block; border: 1px solid var(--color-good-text);"></span> Masjid / Terbaik / Target Tercapai</span>
                 <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-2); display: inline-block; border: 1px solid var(--color-ok-2-text);"></span> Terlaksana Baik</span>
                 <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-ok-1); display: inline-block; border: 1px solid var(--color-ok-1-text);"></span> Rumah / Sendiri / Belum Capai Target</span>
                 <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: var(--color-qadha); display: inline-block; border: 1px solid var(--color-qadha-text);"></span> Qadha (Khusus Sholat)</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><span style="width: 12px; height: 12px; border-radius: 50%; background-color: transparent; display: inline-block; border: 0.5px solid #BA1A1A;"></span> Belum Tersimpan ke Server (Lokal)</span>
             </div>
             
-            <a href="https://refleksiformentee.xo.je/" target="_blank" rel="noopener noreferrer" class="legend-shortcut-btn" style="display: inline-flex; align-items: center; gap: 8px; text-decoration: none; font-size: 0.8rem; font-weight: 700; color: var(--md-sys-color-primary); background-color: var(--md-sys-color-primary-container); padding: 6px 12px; border-radius: 20px; border: 1px solid rgba(0, 106, 106, 0.2);" title="Buka platform refleksi mentee">
-                <i class="fa-solid fa-arrow-up-right-from-square"></i> Web Refleksi Mentee
-            </a>
+            <div id="sync-status-container" style="width: 100%; font-size: 0.8rem; font-weight: 700; color: var(--md-sys-color-primary); display: flex; align-items: center; gap: 6px; margin-top: 4px;">
+                <i class="fa-solid fa-cloud-arrow-up"></i> <span id="sync-status-text">Semua data sinkron dengan server</span>
+            </div>
         </div>
 
-        <div class="download-actions">
-            <div class="nama-pengguna" style="margin-top: 0;"><?= htmlspecialchars($displayName) ?></div>
-            <div style="display: flex; gap: 12px; flex-wrap: wrap;">
-                <a href="download.php" class="download-btn" style="margin-top: 0;"><i class="fa-solid fa-file-lines"></i> Download Laporan (.txt)</a>
-                <button type="button" id="download-pdf-btn" class="download-btn pdf-btn" style="margin-top: 0;"><i class="fa-solid fa-file-pdf"></i> Download Tabel (.pdf)</button>
+        <div class="download-actions" style="flex-direction: column; align-items: flex-start; gap: 8px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
+                <div class="nama-pengguna" style="margin-top: 0;"><?= htmlspecialchars($displayName) ?></div>
+                <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
+                    <a href="download.php" class="download-btn" style="margin-top: 0;"><i class="fa-solid fa-file-lines"></i> Download Laporan (.txt)</a>
+                    <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
+                        <button type="button" id="download-pdf-btn" class="download-btn pdf-btn" style="margin-top: 0;"><i class="fa-solid fa-file-pdf"></i> Download Tabel (.pdf)</button>
+                    </div>
+                </div>
             </div>
+        </div>
+        <div class="build-number-container" style="font-size: 0.75rem; color: var(--md-sys-color-on-surface-variant); opacity: 0.7; font-weight: 700; width: 100%; text-align: center;">
+            <?php
+            $buildFile = __DIR__ . '/build_number.txt';
+            $buildVal = file_exists($buildFile) ? trim(file_get_contents($buildFile)) : '0';
+            echo 'v1.0.0+' . htmlspecialchars($buildVal);
+            ?>
         </div>
     </div>
 
@@ -3064,7 +3210,123 @@ if (isset($manifestPath)) {
 
 <script>
 document.addEventListener('DOMContentLoaded', function() {
+    // Register Service Worker for offline support
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('../sw.js')
+            .then(reg => console.log('Service Worker Registered. Scope:', reg.scope))
+            .catch(err => console.error('Service Worker Registration Failed:', err));
+    }
+
     let semuaDataAmalan = <?= json_encode($semuaDataAmalan); ?>;
+    
+    // Track unsaved draft changes in memory only (lost on page reload)
+    let localChanges = {};
+    localStorage.removeItem('localChanges'); // Clean up any legacy unsaved drafts from localStorage
+    
+    // Track saved changes that need to be uploaded to server when online (persisted)
+    let offlineSavedChanges = JSON.parse(localStorage.getItem('offlineSavedChanges') || '{}');
+
+    // Merge offlineSavedChanges into semuaDataAmalan local cache on load
+    for (const dateStr in offlineSavedChanges) {
+        const bulan = dateStr.substring(0, 7);
+        const day = parseInt(dateStr.substring(8, 10));
+        if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};
+        for (const key in offlineSavedChanges[dateStr]) {
+            if (!semuaDataAmalan[bulan][key]) semuaDataAmalan[bulan][key] = {};
+            semuaDataAmalan[bulan][key][day] = offlineSavedChanges[dateStr][key];
+        }
+    }
+
+    async function syncOfflineChanges() {
+        const changeCount = Object.keys(offlineSavedChanges).reduce((acc, date) => {
+            return acc + Object.keys(offlineSavedChanges[date]).length;
+        }, 0);
+        if (changeCount === 0 || !navigator.onLine) return;
+        
+        const syncText = document.getElementById('sync-status-text');
+        if (syncText) syncText.textContent = 'Menyinkronkan data offline ke server...';
+        
+        const formData = new FormData();
+        formData.append('is_ajax', 'save_multiple_cells');
+        formData.append('changes', JSON.stringify(offlineSavedChanges));
+        
+        try {
+            const response = await fetch('', { method: 'POST', body: formData });
+            const data = await response.json();
+            if (data.status === 'success') {
+                showToast('Data offline berhasil disinkronkan ke server!', 'success');
+                semuaDataAmalan = data.updated_data;
+                offlineSavedChanges = {};
+                localStorage.removeItem('offlineSavedChanges');
+                updateFormForDate._skipScroll = true;
+                updateFormForDate(tanggalInput.value);
+                updateSyncStatus();
+            }
+        } catch (e) {
+            console.error('Failed to sync offline changes:', e);
+            updateSyncStatus();
+        }
+    }
+
+    function updateSyncStatus() {
+        const syncText = document.getElementById('sync-status-text');
+        const syncContainer = document.getElementById('sync-status-container');
+        if (!syncText) return;
+        
+        const changeCount = Object.keys(localChanges).reduce((acc, date) => {
+            return acc + Object.keys(localChanges[date]).length;
+        }, 0);
+
+        const offlineCount = Object.keys(offlineSavedChanges).reduce((acc, date) => {
+            return acc + Object.keys(offlineSavedChanges[date]).length;
+        }, 0);
+
+        if (changeCount > 0) {
+            syncText.textContent = `Ada ${changeCount} perubahan belum disimpan (lokal)`;
+            if (syncContainer) syncContainer.style.color = '#F57C00'; // Orange
+            document.body.classList.add('show-floating-save');
+            const textEl = document.querySelector('#floating-save-area p');
+            if (textEl) {
+                textEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: #FFB300; animation: warningPulse 1.5s ease-in-out infinite;"></i> Ada ${changeCount} perubahan belum disimpan`;
+            }
+        } else {
+            document.body.classList.remove('show-floating-save');
+            if (offlineCount > 0) {
+                if (navigator.onLine) {
+                    syncText.textContent = 'Menyinkronkan data offline...';
+                    if (syncContainer) syncContainer.style.color = '#F57C00';
+                    syncOfflineChanges();
+                } else {
+                    syncText.textContent = `Mode Offline (${offlineCount} data tersimpan di lokal - Belum Sinkron)`;
+                    if (syncContainer) syncContainer.style.color = '#5A5A5A'; // Grey
+                }
+            } else {
+                if (navigator.onLine) {
+                    syncText.textContent = 'Semua data sinkron dengan server';
+                    if (syncContainer) syncContainer.style.color = '#006A6A'; // Teal
+                } else {
+                    syncText.textContent = 'Mode Offline (Semua data sinkron / tersimpan di lokal)';
+                    if (syncContainer) syncContainer.style.color = '#5A5A5A'; // Grey
+                }
+            }
+        }
+    }
+
+    // Update status on page load
+    setTimeout(() => {
+        updateSyncStatus();
+        if (navigator.onLine) {
+            syncOfflineChanges();
+        }
+    }, 100);
+
+    // Event listener for online/offline status
+    window.addEventListener('online', () => {
+        updateSyncStatus();
+        syncOfflineChanges();
+    });
+    window.addEventListener('offline', updateSyncStatus);
+
     
     function isSeninKamisJS(dateStr) {
         const d = new Date(dateStr + 'T00:00:00');
@@ -3287,35 +3549,80 @@ document.addEventListener('DOMContentLoaded', function() {
             floatingSubmitBtn.disabled = true;
         }
 
-        const formData = new FormData(form);
-
-        fetch('', { // Mengirim ke halaman ini sendiri
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                showToast(data.message, 'success');
-                semuaDataAmalan = data.updated_data; // Update data global
-                updateFormForDate._skipScroll = true; // Hindari pergeseran tabel setelah menyimpan data
-                updateFormForDate(tanggalInput.value); // Memuat ulang form dan tabel
-                
-                // Reset initialFormState setelah berhasil disimpan
-                // Sehingga beforeunload tidak akan memblokir lagi
-                setTimeout(() => {
-                    initialFormState = getCurrentFormState();
-                    document.body.classList.remove('show-floating-save');
-                }, 100);
-            } else {
-                showToast(data.message || 'Terjadi kesalahan.', 'error');
+        if (navigator.onLine) {
+            // Merge localChanges into offlineSavedChanges to send everything together
+            const mergedChanges = JSON.parse(JSON.stringify(offlineSavedChanges));
+            for (const dateStr in localChanges) {
+                if (!mergedChanges[dateStr]) mergedChanges[dateStr] = {};
+                for (const key in localChanges[dateStr]) {
+                    mergedChanges[dateStr][key] = localChanges[dateStr][key];
+                }
             }
-        })
-        .catch(error => {
-            showToast('Gagal terhubung ke server.', 'error');
-            console.error('Error:', error);
-        })
-        .finally(() => {
+
+            const formData = new FormData();
+            formData.append('is_ajax', 'save_multiple_cells');
+            formData.append('changes', JSON.stringify(mergedChanges));
+
+            fetch('', { // Mengirim ke halaman ini sendiri
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    showToast(data.message, 'success');
+                    semuaDataAmalan = data.updated_data; // Update data global
+                    
+                    // Clear both local unsaved changes and offline saved changes
+                    localChanges = {};
+                    offlineSavedChanges = {};
+                    localStorage.removeItem('offlineSavedChanges');
+                    
+                    updateFormForDate._skipScroll = true; // Hindari pergeseran tabel setelah menyimpan data
+                    updateFormForDate(tanggalInput.value); // Memuat ulang form dan tabel
+                    updateSyncStatus();
+                } else {
+                    showToast(data.message || 'Terjadi kesalahan.', 'error');
+                }
+            })
+            .catch(error => {
+                // Network failed mid-request: save locally
+                saveDraftLocally();
+            })
+            .finally(() => {
+                resetSaveButtons();
+            });
+        } else {
+            // Offline: save locally
+            saveDraftLocally();
+            resetSaveButtons();
+        }
+
+        function saveDraftLocally() {
+            // Merge localChanges into offlineSavedChanges
+            for (const dateStr in localChanges) {
+                if (!offlineSavedChanges[dateStr]) offlineSavedChanges[dateStr] = {};
+                for (const key in localChanges[dateStr]) {
+                    offlineSavedChanges[dateStr][key] = localChanges[dateStr][key];
+                    
+                    // Update local cache so it keeps showing the value
+                    const bulan = dateStr.substring(0, 7);
+                    const day = parseInt(dateStr.substring(8, 10));
+                    if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};
+                    if (!semuaDataAmalan[bulan][key]) semuaDataAmalan[bulan][key] = {};
+                    semuaDataAmalan[bulan][key][day] = localChanges[dateStr][key];
+                }
+            }
+            localStorage.setItem('offlineSavedChanges', JSON.stringify(offlineSavedChanges));
+            localChanges = {}; // clear unsaved draft
+            
+            showToast('Data berhasil disimpan secara lokal (Offline)!', 'success');
+            updateFormForDate._skipScroll = true;
+            updateFormForDate(tanggalInput.value);
+            updateSyncStatus();
+        }
+
+        function resetSaveButtons() {
             if (submitBtn) {
                 submitBtn.innerHTML = originalBtnText;
                 submitBtn.disabled = false;
@@ -3324,7 +3631,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 floatingSubmitBtn.innerHTML = floatingOriginalText;
                 floatingSubmitBtn.disabled = false;
             }
-        });
+        }
     });
 
 
@@ -3345,23 +3652,47 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     window.checkForChanges = function() {
-        if (getCurrentFormState() !== initialFormState) {
-            document.body.classList.add('show-floating-save');
-            const activeDate = tanggalInput.value;
-            const textEl = document.querySelector('#floating-save-area p');
-            if (textEl) {
-                textEl.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: #FFB300; animation: warningPulse 1.5s ease-in-out infinite;"></i> Ada perubahan pada tanggal ${activeDate}`;
-            }
-        } else {
-            document.body.classList.remove('show-floating-save');
+        const activeDate = tanggalInput.value;
+        if (!localChanges[activeDate]) {
+            localChanges[activeDate] = {};
         }
+
+        const keys = [
+            'subuh', 'dzuhur', 'ashar', 'maghrib', 'isya',
+            'dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh',
+            'sedekah', 'almatsurat_pagi', 'almatsurat_petang',
+            'istighfar', 'tilawah', 'rawatib'
+        ];
+
+        keys.forEach(key => {
+            const val = getCurrentFormValue(key);
+            const day = new Date(activeDate + 'T00:00:00').getDate();
+            const bulan = activeDate.substring(0, 7);
+            const originalVal = semuaDataAmalan[bulan]?.[key]?.[day] ?? '';
+            
+            if (val !== originalVal) {
+                localChanges[activeDate][key] = val;
+            } else {
+                if (localChanges[activeDate]) {
+                    delete localChanges[activeDate][key];
+                }
+            }
+        });
+
+        if (localChanges[activeDate] && Object.keys(localChanges[activeDate]).length === 0) {
+            delete localChanges[activeDate];
+        }
+
+        localStorage.setItem('localChanges', JSON.stringify(localChanges));
+        updateSyncStatus();
     }
     
     // --- PREVENT PAGE REFRESH IF THERE ARE UNSAVED CHANGES ---
     window.addEventListener('beforeunload', function(e) {
-        // Cek apakah ada perubahan yang belum disimpan
-        if (getCurrentFormState() !== initialFormState) {
-            // Pesan peringatan standar browser
+        const changeCount = Object.keys(localChanges).reduce((acc, date) => {
+            return acc + Object.keys(localChanges[date]).length;
+        }, 0);
+        if (changeCount > 0) {
             e.preventDefault();
             e.returnValue = ''; // Chrome requires returnValue to be set
             return ''; // Legacy browsers
@@ -3782,18 +4113,31 @@ document.addEventListener('DOMContentLoaded', function() {
                         } else if (displayVal.startsWith('✓ (')) {
                             displayVal = displayVal.replace('✓ (', '✓<br><small>(').replace(')', ')</small>');
                         } else if (displayVal.startsWith('Q (')) {
-                            const qmatch = displayVal.match(/^Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)$/);
+                            const qmatch = displayVal.match(/^Q \((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\)$/);
                             if (qmatch) {
-                                displayVal = 'Q ' + qmatch[1];
+                                const execDate = qmatch[1];
+                                const execTime = qmatch[2];
+                                if (execDate !== cellDate) {
+                                    const dParts = execDate.split('-');
+                                    displayVal = `Q ${dParts[2]}/${dParts[1]}<br><small>(${execTime})</small>`;
+                                } else {
+                                    displayVal = `Q ${execTime}`;
+                                }
                             } else {
-                                displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                                const qmatchTime = displayVal.match(/^Q \((\d{2}:\d{2})\)$/);
+                                if (qmatchTime) {
+                                    displayVal = 'Q ' + qmatchTime[1];
+                                } else {
+                                    displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                                }
                             }
                         }
                     }
                     
                     const editableClass = isLocked ? '' : 'editable-cell';
                     const isTodayCell = isCurrentMonth && i === todayDay;
-                    bodyHtml += `<td class="${editableClass} ${colorClass}${isTodayCell ? ' today-column' : ''}" data-key="${key}" data-day="${i}">${displayVal}</td>`;
+                    const isUnsaved = offlineSavedChanges[cellDate]?.[key] !== undefined;
+                    bodyHtml += `<td class="${editableClass} ${colorClass}${isTodayCell ? ' today-column' : ''}${isUnsaved ? ' unsaved-local-change' : ''}" data-key="${key}" data-day="${i}">${displayVal}</td>`;
                 }
                 bodyHtml += `</tr>`;
                 isFirstRow = false;
@@ -4001,11 +4345,6 @@ document.addEventListener('DOMContentLoaded', function() {
     // Function to ensure date in form matches selected cell date
     async function ensureActiveDate(dateStr, labelName = '', categoryName = '') {
         if (tanggalInput.value !== dateStr) {
-            if (getCurrentFormState() !== initialFormState) {
-                return new Promise((resolve) => {
-                    showCustomSwitchConfirmation(tanggalInput.value, dateStr, resolve, labelName, categoryName);
-                });
-            }
             tanggalInput.value = dateStr;
             lastDateValue = dateStr; // Sinkronkan lastDateValue
             await fetchAyyamulBidh(dateStr);
@@ -4090,6 +4429,31 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
         `;
         
+        // Tampilkan timestamp terakhir kali diisi di popover
+        const meta = semuaDataAmalan.__metadata || {};
+        const timestamps = meta.timestamps || {};
+        const dateTimestamps = timestamps[dateStr] || {};
+        const timestampVal = dateTimestamps[key] || '';
+        
+        let timestampText = 'Belum pernah diisi';
+        if (timestampVal) {
+            const parts = timestampVal.split(' ');
+            if (parts.length === 2) {
+                const dateParts = parts[0].split('-');
+                if (dateParts.length === 3) {
+                    timestampText = `${dateParts[2]}-${dateParts[1]}-${dateParts[0]} ${parts[1]}`;
+                } else {
+                    timestampText = timestampVal;
+                }
+            } else {
+                timestampText = timestampVal;
+            }
+        }
+        const tsEl = document.getElementById('popover-timestamp-text');
+        if (tsEl) {
+            tsEl.textContent = 'Terakhir diisi: ' + timestampText;
+        }
+
         const yearMonth = dateStr.substring(0, 7);
         const currentValue = getCurrentFormValue(key);
         
@@ -4120,9 +4484,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     const val = this.dataset.value;
                     saveCellData(dateStr, key, val, cell);
-                    
-                    // Beri Toast informatif
-                    showToast(`Status ${categoryName} > ${labelName} berhasil diubah!`, 'success');
                 });
             });
             
@@ -4130,10 +4491,10 @@ document.addEventListener('DOMContentLoaded', function() {
             // SHOLAT WAJIB
             const sholatStates = [
                 { val: '', label: '--', class: 'status-empty', icon: 'fa-circle-question' },
-                { val: 'M', label: 'Masjid', class: 'status-good', icon: 'fa-mosque' },
-                { val: 'R-J', label: 'R. Jam', class: 'status-ok-2', icon: 'fa-house-user' },
-                { val: 'M-S', label: 'M. Sen', class: 'status-ok-1', icon: 'fa-person-praying' },
-                { val: 'R', label: 'R. Sen', class: 'status-ok-1', icon: 'fa-house' },
+                { val: 'M', label: 'Masjid (Jamaah)', class: 'status-good', icon: 'fa-mosque' },
+                { val: 'R-J', label: 'Rumah (Jamaah)', class: 'status-ok-2', icon: 'fa-house-user' },
+                { val: 'M-S', label: 'Masjid (Sendiri)  ', class: 'status-ok-1', icon: 'fa-person-praying' },
+                { val: 'R', label: 'Rumah (Sendiri)', class: 'status-ok-1', icon: 'fa-house' },
                 { val: 'Q', label: 'Qadha', class: 'status-qadha', icon: 'fa-clock-rotate-left' }
             ];
             
@@ -4389,8 +4750,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     
                     popoverStatus = this.dataset.value;
                     triggerDetailsSave();
-                    
-                    showToast(`Status ${categoryName} > ${labelName} berhasil diubah!`, 'success');
                 });
             });
             
@@ -4440,8 +4799,11 @@ document.addEventListener('DOMContentLoaded', function() {
     function updateTableCellVisually(cell, key, newVal) {
         const isToday = cell.classList.contains('today-column');
         const colorClass = getCellColorClassJS(key, newVal);
+        const dayStr = String(cell.dataset.day).padStart(2, '0');
+        const cellDate = `${tanggalInput.value.substring(0, 7)}-${dayStr}`;
+        const isUnsaved = offlineSavedChanges[cellDate]?.[key] !== undefined;
         
-        cell.className = `editable-cell ${colorClass}${isToday ? ' today-column' : ''}`;
+        cell.className = `editable-cell ${colorClass}${isToday ? ' today-column' : ''}${isUnsaved ? ' unsaved-local-change' : ''}`;
         
         let displayVal = newVal.toString().replace(/</g, "&lt;").replace(/>/g, "&gt;");
         if (key === 'istighfar') {
@@ -4451,11 +4813,23 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (displayVal.startsWith('✓ (')) {
             displayVal = displayVal.replace('✓ (', '✓<br><small>(').replace(')', ')</small>');
         } else if (displayVal.startsWith('Q (')) {
-            const qmatch = displayVal.match(/^Q \((?:\d{4}-\d{2}-\d{2} )?(\d{2}:\d{2})\)$/);
+            const qmatch = displayVal.match(/^Q \((\d{4}-\d{2}-\d{2}) (\d{2}:\d{2})\)$/);
             if (qmatch) {
-                displayVal = 'Q ' + qmatch[1];
+                const execDate = qmatch[1];
+                const execTime = qmatch[2];
+                if (execDate !== cellDate) {
+                    const dParts = execDate.split('-');
+                    displayVal = `Q ${dParts[2]}/${dParts[1]}<br><small>(${execTime})</small>`;
+                } else {
+                    displayVal = `Q ${execTime}`;
+                }
             } else {
-                displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                const qmatchTime = displayVal.match(/^Q \((\d{2}:\d{2})\)$/);
+                if (qmatchTime) {
+                    displayVal = 'Q ' + qmatchTime[1];
+                } else {
+                    displayVal = displayVal.replace('Q (', 'Q ').replace(')', '');
+                }
             }
         }
         cell.innerHTML = displayVal;
@@ -4535,13 +4909,34 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         }
 
+        // Cache locally in localChanges
+        if (!localChanges[dateStr]) {
+            localChanges[dateStr] = {};
+        }
+        localChanges[dateStr][key] = value;
+        localStorage.setItem('localChanges', JSON.stringify(localChanges));
+
+        // Update semuaDataAmalan local cache so other parts of UI (like date changing or month switching) keep this edit
+        const bulan = dateStr.substring(0, 7);
+        const dayInt = parseInt(dateStr.substring(8, 10));
+        if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};
+        if (!semuaDataAmalan[bulan][key]) semuaDataAmalan[bulan][key] = {};
+        semuaDataAmalan[bulan][key][dayInt] = value;
+
+        // Cache last modified timestamp locally
+        if (!semuaDataAmalan.__metadata) semuaDataAmalan.__metadata = {};
+        if (!semuaDataAmalan.__metadata.timestamps) semuaDataAmalan.__metadata.timestamps = {};
+        if (!semuaDataAmalan.__metadata.timestamps[dateStr]) semuaDataAmalan.__metadata.timestamps[dateStr] = {};
+        const localNowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        semuaDataAmalan.__metadata.timestamps[dateStr][key] = localNowStr;
+
         updateTableCellVisually(cell, key, value);
 
         if (shouldClose) {
             closePopover();
         }
 
-        checkForChanges();
+        updateSyncStatus();
 
         cell.classList.add('cell-save-success');
         setTimeout(() => cell.classList.remove('cell-save-success'), 800);
@@ -4622,6 +5017,9 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
     <div class="popover-body" id="popover-body-content">
         <!-- Dynamic content -->
+    </div>
+    <div class="popover-timestamp" style="font-size: 0.72rem; color: var(--md-sys-color-on-surface-variant); opacity: 0.8; border-top: 1px solid var(--md-sys-color-outline-variant); padding: 8px 12px; display: flex; align-items: center; gap: 6px; justify-content: flex-end; font-weight: 500;">
+        <i class="fa-solid fa-clock"></i> <span id="popover-timestamp-text">Terakhir diisi: -</span>
     </div>
 </div>
 
