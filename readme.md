@@ -30,8 +30,12 @@ php -l index.php
 
 ## Catatan
 
+### Cancelled
 buat layout penginputan lebih nyaman dengan membuat semuanya muat disatu layar, relayout, bagian penginputan data saya yang dibuat begitu
 
+### Planned
 pecah kode menggunakan riverpod style?
 
 pecah kode berdasarkan fungsi, satu kode satu fungsi
+
+tolong cek file yang tidak digunakan
