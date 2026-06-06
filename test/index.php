@@ -3219,6 +3219,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let semuaDataAmalan = <?= json_encode($semuaDataAmalan); ?>;
     
+    // Cache management: Load from offline cache if offline, otherwise overwrite cache with fresh server data
+    if (!navigator.onLine) {
+        const cached = localStorage.getItem('cachedDataAmalan');
+        if (cached) {
+            try {
+                semuaDataAmalan = JSON.parse(cached);
+                console.log('Loaded data from offline cache');
+            } catch (e) {
+                console.error('Failed to parse cached data:', e);
+            }
+        }
+    } else {
+        localStorage.setItem('cachedDataAmalan', JSON.stringify(semuaDataAmalan));
+    }
+
+    function saveDataToLocalCache() {
+        localStorage.setItem('cachedDataAmalan', JSON.stringify(semuaDataAmalan));
+    }
+    
     // Track unsaved draft changes in memory only (lost on page reload)
     let localChanges = {};
     localStorage.removeItem('localChanges'); // Clean up any legacy unsaved drafts from localStorage
@@ -3256,6 +3275,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (data.status === 'success') {
                 showToast('Data offline berhasil disinkronkan ke server!', 'success');
                 semuaDataAmalan = data.updated_data;
+                saveDataToLocalCache();
                 offlineSavedChanges = {};
                 localStorage.removeItem('offlineSavedChanges');
                 updateFormForDate._skipScroll = true;
@@ -3572,6 +3592,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 if (data.status === 'success') {
                     showToast(data.message, 'success');
                     semuaDataAmalan = data.updated_data; // Update data global
+                    saveDataToLocalCache();
                     
                     // Clear both local unsaved changes and offline saved changes
                     localChanges = {};
