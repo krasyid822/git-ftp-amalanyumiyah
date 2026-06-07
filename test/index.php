@@ -3218,7 +3218,7 @@ window.APP_CONFIG = {
     displayName: <?= json_encode($displayName); ?>
 };
 </script>
-<script type="module" src="assets/js/app.js"></script>
+<script type="module" src="<?= isset($manifestPath) ? '../../test/' : '' ?>assets/js/app.js"></script>
 
 <div id="table-inline-popover" class="table-popover" style="display: none;">
     <div class="popover-header">

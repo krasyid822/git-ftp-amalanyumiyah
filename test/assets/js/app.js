@@ -31,10 +31,14 @@ import { initPrayerSliders } from './components/prayer_slider.js';
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize Prayer Sliders
     initPrayerSliders();
-    // Register Service Worker for offline support
+    // Register Service Worker for offline support at the root scope of the domain
     if ('serviceWorker' in navigator) {
-        navigator.serviceWorker.register('../sw.js')
-            .then(reg => console.log('Service Worker Registered. Scope:', reg.scope))
+        // Determine path dynamically based on whether it is in a subdirectory (sda/user) or main directory (test)
+        const isSubFolder = window.location.pathname.includes('/sda/');
+        const swPath = isSubFolder ? '../../sw.js' : '../sw.js';
+        const swScope = isSubFolder ? '../../' : '../';
+        navigator.serviceWorker.register(swPath, { scope: swScope })
+            .then(reg => console.log('Service Worker Registered dynamically:', reg.scope))
             .catch(err => console.error('Service Worker Registration Failed:', err));
     }
 
