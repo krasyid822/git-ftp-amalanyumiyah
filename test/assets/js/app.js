@@ -33,10 +33,19 @@ document.addEventListener('DOMContentLoaded', function() {
     initPrayerSliders();
     // Register Service Worker for offline support at the root scope of the domain
     if ('serviceWorker' in navigator) {
-        // Determine path dynamically based on whether it is in a subdirectory (sda/user) or main directory (test)
-        const isSubFolder = window.location.pathname.includes('/sda/');
-        const swPath = isSubFolder ? '../../sw.js' : '../sw.js';
-        const swScope = isSubFolder ? '../../' : '../';
+        // Calculate relative path to root dynamically based on current path depth
+        const pathname = window.location.pathname;
+        // e.g., /sda/rafie/index.php -> segments: ["", "sda", "rafie", "index.php"] -> depth = 3 (needs "../../sw.js")
+        // e.g., /test/index.php -> segments: ["", "test", "index.php"] -> depth = 2 (needs "../sw.js")
+        const segments = pathname.split('/').filter(Boolean);
+        let swPath = 'sw.js';
+        let swScope = './';
+        if (segments.length > 1) {
+            const depth = segments.length - 1;
+            swPath = '../'.repeat(depth) + 'sw.js';
+            swScope = '../'.repeat(depth);
+        }
+        
         navigator.serviceWorker.register(swPath, { scope: swScope })
             .then(reg => console.log('Service Worker Registered dynamically:', reg.scope))
             .catch(err => console.error('Service Worker Registration Failed:', err));

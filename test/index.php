@@ -3218,7 +3218,27 @@ window.APP_CONFIG = {
     displayName: <?= json_encode($displayName); ?>
 };
 </script>
-<script type="module" src="<?= isset($manifestPath) ? '../../test/' : '' ?>assets/js/app.js"></script>
+<?php
+// Hitung relative path dari index.php yang memanggil ke root project
+$currentDir = __DIR__;
+$scriptRelativePath = '';
+if (defined('PROJECT_ROOT')) {
+    // Jika didefinisikan PROJECT_ROOT, kita bisa hitung jalurnya
+} else {
+    // Fallback: deteksi berdasarkan lokasi file pemanggil (backtrace)
+    $backtrace = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 1);
+    if (!empty($backtrace[0]['file'])) {
+        $callerFile = $backtrace[0]['file'];
+        // Tentukan folder pemanggil relatif terhadap folder test
+        // Jika callerFile berada di sda/rafie/index.php, __DIR__ adalah test.
+        // Maka kita butuh path relatif '../../test/' untuk dimuat di HTML.
+        if (strpos($callerFile, 'test') === false) {
+            $scriptRelativePath = '../../test/';
+        }
+    }
+}
+?>
+<script type="module" src="<?= $scriptRelativePath ?>assets/js/app.js"></script>
 
 <div id="table-inline-popover" class="table-popover" style="display: none;">
     <div class="popover-header">
