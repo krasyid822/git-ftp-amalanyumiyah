@@ -57,11 +57,26 @@ self.addEventListener('fetch', (e) => {
           if (cachedResponse) {
             return cachedResponse;
           }
-          // Optional: handle generic offline fallback for pages
+          // Normalize paths for matching index pages
           if (e.request.headers.get('accept').includes('text/html')) {
-            // Fallback to the current pathname (since service worker controls the page)
             const url = new URL(e.request.url);
-            return caches.match(url.pathname) || caches.match(e.request) || caches.match('./index.php') || caches.match('./');
+            const path = url.pathname;
+            
+            // Try matching path directly, or appending index.php if it's a directory path
+            const possiblePaths = [
+              path,
+              path.endsWith('/') ? path + 'index.php' : path + '/index.php',
+              path.endsWith('index.php') ? path.substring(0, path.lastIndexOf('index.php')) : path
+            ];
+            
+            return Promise.any(
+              possiblePaths.map(p => caches.match(p).then(res => {
+                if (res) return res;
+                throw new Error('Not found');
+              }))
+            ).catch(() => {
+              return caches.match(e.request) || caches.match('./index.php') || caches.match('./');
+            });
           }
         });
       })

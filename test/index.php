@@ -3044,6 +3044,7 @@ if (isset($manifestPath)) {
     </form>
 
     <div class="table-container">
+        <div class="nama-pengguna" style="margin-top: 0;"><?= htmlspecialchars($displayName) ?></div>
         <div class="month-navigator" style="position: relative;">
             <button type="button" class="month-nav-btn" id="month-prev-btn" title="Bulan Sebelumnya"><i class="fa-solid fa-chevron-left"></i></button>
             <h2 id="month-title">
@@ -3167,7 +3168,6 @@ if (isset($manifestPath)) {
 
         <div class="download-actions" style="flex-direction: column; align-items: flex-start; gap: 8px;">
             <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">
-                <div class="nama-pengguna" style="margin-top: 0;"><?= htmlspecialchars($displayName) ?></div>
                 <div style="display: flex; gap: 12px; flex-wrap: wrap; align-items: center;">
                     <a href="download.php" class="download-btn" style="margin-top: 0;"><i class="fa-solid fa-file-lines"></i> Download Laporan (.txt)</a>
                     <div style="display: flex; flex-direction: column; align-items: center; gap: 4px;">
