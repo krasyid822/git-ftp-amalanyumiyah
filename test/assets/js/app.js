@@ -12,7 +12,8 @@ import {
 } from './providers/state_provider.js';
 import { 
     updateFormForDate, 
-    scrollReportToSelectedDate 
+    scrollReportToSelectedDate,
+    updateTableCellVisually
 } from './components/table_view.js';
 import { 
     openPopover, 
@@ -184,6 +185,17 @@ document.addEventListener('DOMContentLoaded', function() {
             if (val !== originalVal) {
                 if (!localChanges[activeDate]) localChanges[activeDate] = {};
                 localChanges[activeDate][key] = val;
+                
+                // Update local memory cache so it persists when switching dates
+                if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};
+                if (!semuaDataAmalan[bulan][key]) semuaDataAmalan[bulan][key] = {};
+                semuaDataAmalan[bulan][key][day] = val;
+                
+                // Update the table cell visually
+                const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`);
+                if (cell) {
+                    updateTableCellVisually(cell, key, val);
+                }
             } else {
                 if (localChanges[activeDate]) {
                     delete localChanges[activeDate][key];
@@ -382,57 +394,10 @@ document.addEventListener('DOMContentLoaded', function() {
     // Editable cell event listener
     async function ensureActiveDate(dateStr, labelName = '', categoryName = '') {
         if (tanggalInput.value !== dateStr) {
-            const oldDate = tanggalInput.value;
-            if (getCurrentFormState() !== initialFormState) {
-                return new Promise((resolve) => {
-                    const area = document.getElementById('floating-save-area');
-                    const container = area?.querySelector('.container');
-                    if (!container) {
-                        resolve(true);
-                        return;
-                    }
-                    
-                    const originalHTML = container.innerHTML;
-                    const worshipInfo = (categoryName && labelName) ? ` ke pengisian <strong>${categoryName} &gt; ${labelName}</strong>` : '';
-                    
-                    container.innerHTML = `
-                        <p style="font-size: 0.8rem; font-weight: 700; color: #FFFFFF; display: flex; align-items: center; gap: 8px; margin: 0; white-space: normal; line-height: 1.4; max-width: 60%;">
-                            <i class="fa-solid fa-triangle-exclamation" style="color: #FFB300; animation: warningPulse 1.5s ease-in-out infinite;"></i>
-                            Ada perubahan yang belum disimpan pada tanggal ${oldDate}. Beralih tanggal${worshipInfo} akan membatalkan perubahan tersebut. Lanjutkan?
-                        </p>
-                        <div style="display: flex; gap: 8px;">
-                            <button type="button" class="submit-btn continue-btn" style="background: linear-gradient(135deg, #FF9800 0%, #F57C00 100%); color: white; border: none; padding: 6px 14px; font-size: 0.8rem; font-weight: 700; border-radius: 20px; cursor: pointer; box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);">Lanjutkan</button>
-                            <button type="button" class="submit-btn cancel-btn" style="background: rgba(255, 255, 255, 0.15); color: white; border: 1px solid rgba(255, 255, 255, 0.3); padding: 6px 14px; font-size: 0.8rem; font-weight: 700; border-radius: 20px; cursor: pointer;">Batal</button>
-                        </div>
-                    `;
-                    document.body.classList.add('show-floating-save');
-                    area.style.transform = 'translate(-50%, -10px)';
-                    setTimeout(() => { area.style.transform = 'translate(-50%, 0)'; }, 150);
-                    
-                    const continueBtn = container.querySelector('.continue-btn');
-                    const cancelBtn = container.querySelector('.cancel-btn');
-                    
-                    continueBtn.addEventListener('click', async () => {
-                        container.innerHTML = originalHTML;
-                        tanggalInput.value = dateStr;
-                        lastDateValue = dateStr;
-                        await fetchAyyamulBidh(dateStr);
-                        updateFormForDate(dateStr);
-                        resolve(true);
-                    });
-                    
-                    cancelBtn.addEventListener('click', () => {
-                        container.innerHTML = originalHTML;
-                        window.checkForChanges();
-                        resolve(false);
-                    });
-                });
-            } else {
-                tanggalInput.value = dateStr;
-                lastDateValue = dateStr;
-                await fetchAyyamulBidh(dateStr);
-                updateFormForDate(dateStr);
-            }
+            tanggalInput.value = dateStr;
+            lastDateValue = dateStr;
+            await fetchAyyamulBidh(dateStr);
+            updateFormForDate(dateStr);
         }
         return true;
     }
@@ -530,16 +495,9 @@ document.addEventListener('DOMContentLoaded', function() {
         const oldDate = lastDateValue;
         if (newDate === oldDate) return;
         
-        if (getCurrentFormState() !== initialFormState) {
-            const confirmed = await ensureActiveDate(newDate);
-            if (!confirmed) {
-                this.value = oldDate;
-            }
-        } else {
-            lastDateValue = newDate;
-            await fetchAyyamulBidh(newDate);
-            updateFormForDate(newDate);
-        }
+        lastDateValue = newDate;
+        await fetchAyyamulBidh(newDate);
+        updateFormForDate(newDate);
     });
 
     // Initial Load Setup
