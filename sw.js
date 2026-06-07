@@ -65,6 +65,7 @@ self.addEventListener('fetch', (e) => {
             // Try matching path directly, or appending index.php if it's a directory path
             const possiblePaths = [
               path,
+              path.endsWith('/') ? path : path + '/',
               path.endsWith('/') ? path + 'index.php' : path + '/index.php',
               path.endsWith('index.php') ? path.substring(0, path.lastIndexOf('index.php')) : path
             ];
