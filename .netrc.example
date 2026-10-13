@@ -1,0 +1,25 @@
+# Contoh konfigurasi kredensial FTP untuk git-ftp.
+#
+# Salin file ini menjadi ~/.netrc (JANGAN di dalam repo), lalu isi dengan
+# kredensial asli Anda:
+#
+#   cp .netrc.example ~/.netrc
+#   chmod 600 ~/.netrc
+#
+# Format: machine <host> / login <user> / password <password>
+# Baris harus diawali spasi (tab juga boleh), bukan '='.
+#
+# CATATAN: .netrc hanya untuk kredensial. Path/direktori remote TIDAK
+# disimpan di sini, tapi lewat git config:
+#
+#   git config --local git-ftp.url ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/
+#   git config --local git-ftp.user if0_37577629
+
+machine ftpupload.net
+  login if0_37577629
+  password GANTI_DENGAN_PASSWORD_ANDA
+
+# Contoh host lain:
+# machine ftp.example.com
+#   login user123
+#   password GANTI_DENGAN_PASSWORD_ANDA
