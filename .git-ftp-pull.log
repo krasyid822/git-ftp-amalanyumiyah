@@ -1,0 +1,12 @@
+[2026-10-14 11:33:19] ==> Mulai. Log: .git-ftp-pull.log
+[2026-10-14 11:33:19] ==> Aksi      : status
+[2026-10-14 11:33:19] ==> URL       : ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/
+[2026-10-14 11:33:19] ==> User      : if0_37577629
+[2026-10-14 11:33:24] ==> Deploy    : commit a6887cb6c141916d91f3a7976f39f0ab0df7ed4c
+[2026-10-14 11:33:24] ==> Branch    : main
+[2026-10-14 11:33:24] ==> HEAD      : c288c80
+## main...origin/main [di depan 4]
+ M pull.sh
+?? .git-ftp-pull.log
+?? push.sh
+[2026-10-14 11:33:24] OK  Selesai dalam 0 detik.
