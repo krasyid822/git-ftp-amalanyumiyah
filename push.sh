@@ -18,11 +18,23 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; NC=$'\033[0m'
+LOGFILE=".git-ftp-push.log"
 
-step() { echo -e "${GREEN}==>${NC} $*"; }
-warn() { echo -e "${YELLOW}!  ${NC} $*"; }
-err()  { echo -e "${RED}x  ${NC} $*" >&2; }
+RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; BLUE=$'\033[34m'; NC=$'\033[0m'
+
+log_line() {
+    printf '[%s] %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$1" >> "$LOGFILE"
+}
+step() { printf '%b==> %b%s\n' "$BLUE" "$NC" "$*";   log_line "==> $*"; }
+ok()   { printf '%b OK %b%s\n'  "$GREEN" "$NC" "$*"; log_line "OK  $*"; }
+warn() { printf '%b !   %b%s\n' "$YELLOW" "$NC" "$*"; log_line "!   $*"; }
+err()  { printf '%b ERR %b%s\n' "$RED" "$NC" "$*" >&2; log_line "ERR $*"; }
+
+# Jalankan perintah: tampilkan di layar + catat ke logfile
+run() {
+    "$@" 2>&1 | tee -a "$LOGFILE"
+    return "${PIPESTATUS[0]}"
+}
 
 # Cek prasyarat yang hanya berlaku untuk FTP
 need_git_ftp() {
@@ -48,24 +60,33 @@ do_commit() {
         fi
         msg="update"
     fi
-    git add -A
-    git commit -m "$msg"
-    step "Commit: $msg"
+    run git add -A
+    run git commit -m "$msg"
+    ok "Commit: $msg"
 }
 
 do_github() {
     step "Push ke GitHub (origin/main)..."
-    git push origin main
-    step "GitHub OK."
+    run git push origin main
+    ok "GitHub tersinkron."
 }
 
 do_ftp() {
     need_git_ftp
-    step "Cek commit terakhir yang ter-deploy..."
-    git ftp show --quiet 2>/dev/null | head -1 || warn "Belum pernah ada deploy."
+    step "Commit terakhir di server: $(git ftp show 2>/dev/null | head -1 | cut -d' ' -f2 || echo 'belum ada .git-ftp.log')"
+
+    # .htaccess di server disuntik InfinityFree; push akan menimpanya
+    if git diff --cached --name-only 2>/dev/null | grep -qx '.htaccess'; then
+        warn ".htaccess ikut berubah. Server punya blok 'InfinityFree Managed Code'"
+        warn "yang akan hilang jika Anda push."
+        printf "Tetap push .htaccess? [y/N]: "
+        read -r j
+        [ "$j" = "y" ] || { warn ".htaccess dilewati."; return 0; }
+    fi
+
     step "Push ke server FTP..."
-    git ftp push
-    step "FTP OK."
+    run git ftp push
+    ok "FTP tersinkron."
 }
 
 case "${1:-all}" in
@@ -85,6 +106,9 @@ case "${1:-all}" in
         echo
         step "Commit terakhir di server FTP:"
         git ftp show 2>/dev/null | head -3 || warn "belum ada .git-ftp.log di server"
+        echo
+        step "HEAD lokal : $(git rev-parse --short HEAD)"
+        step "HEAD server: $(git ftp show 2>/dev/null | head -1 | cut -d' ' -f2 || echo '?')"
         ;;
     all)
         do_commit "${2:-}"
