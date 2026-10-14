@@ -1,7 +1,8 @@
-# Contoh konfigurasi kredensial FTP untuk git-ftp.
+# =====================================================================
+# Konfigurasi FTP untuk git-ftp
 #
-# Salin file ini menjadi ~/.netrc (JANGAN di dalam repo), lalu isi dengan
-# kredensial asli Anda:
+# Salin file ini menjadi ~/.netrc (JANGAN di dalam repo), lalu isi
+# dengan kredensial asli Anda:
 #
 #   cp .netrc.example ~/.netrc
 #   chmod 600 ~/.netrc
@@ -9,11 +10,27 @@
 # Format: machine <host> / login <user> / password <password>
 # Baris harus diawali spasi (tab juga boleh), bukan '='.
 #
-# CATATAN: .netrc hanya untuk kredensial. Path/direktori remote TIDAK
-# disimpan di sini, tapi lewat git config:
+# ---------------------------------------------------------------------
+# CATATAN PENTING
 #
-#   git config --local git-ftp.url ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/
-#   git config --local git-ftp.user if0_37577629
+# git-ftp TIDAK membaca file .env. Konfigurasi di sini dipecah dua:
+#
+#   1. Kredensial (bagian bawah file ini) -> ~/.netrc
+#   2. URL + direktori remote           -> git config
+#
+# Jangan pernah menaruh password asli di dalam repo.
+# =====================================================================
+
+
+# ---------------------------------------------------------------------
+# [1] KREDENSIAL  -> disimpan di ~/.netrc
+#
+# Nilai di bawah ini adalah yang diisikan ke ~/.netrc. Pastikan juga
+# git-ftp punya password-command supaya membaca ~/.netrc:
+#
+#   git config --local git-ftp.password-command \
+#     'awk "/^machine ftpupload.net\$/{f=1;next} f&&/^  login/{u=\$2;next} f&&/^  password/{print \$2;exit}" ~/.netrc'
+# ---------------------------------------------------------------------
 
 machine ftpupload.net
   login if0_37577629
@@ -23,3 +40,32 @@ machine ftpupload.net
 # machine ftp.example.com
 #   login user123
 #   password GANTI_DENGAN_PASSWORD_ANDA
+
+
+# ---------------------------------------------------------------------
+# [2] URL + DIREKTORI REMOTE  -> disimpan di git config (.git/config)
+#
+# Path/direktori remote TIDAK disimpan di ~/.netrc, karena .netrc hanya
+# punya 3 field. Jalankan perintah ini sekali per repo:
+#
+#   git config --local git-ftp.url ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/
+#   git config --local git-ftp.user if0_37577629
+#
+# Rinciannya untuk host ini:
+#
+#   FTP_URL   = ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/
+#   FTP_HOST  = ftpupload.net
+#   FTP_PORT  = 21
+#   FTP_DIR   = /amalanyaumiyah.xo.je/htdocs/
+#   FTP_USER  = if0_37577629
+# ---------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------
+# CATATAN
+#
+# - git ftp pull butuh lftp terinstall: sudo pacman -S lftp
+# - ./pull.sh  sudah mengecek syarat di atas sebelum jalan
+# - .htaccess di server disuntik InfinityFree dengan blok
+#   "Managed Code". Hati-hati saat push, jangan sampai tertimpa.
+# ---------------------------------------------------------------------
