@@ -1,2 +1,6 @@
-ErrorDocument 404 /test/404.html
+
+# BEGIN InfinityFree Managed Code
+# DO NOT EDIT - MANAGED BY THE MEMBERS AREA
 ErrorDocument 403 /test/404.html
+ErrorDocument 404 /test/404.html
+# END InfinityFree Managed Code
