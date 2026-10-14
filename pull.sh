@@ -3,12 +3,17 @@
 # pull.sh - Menarik perubahan terbaru dari server FTP ke repo ini.
 #
 # Cara pakai:
-#   ./pull.sh              -> git ftp pull (merge ke branch sekarang)
+#   ./pull.sh              -> git ftp pull --changed-only --no-commit
 #   ./pull.sh init         -> upload semua file & buat .git-ftp.log di server
 #   ./pull.sh show         -> lihat commit terakhir yang di-deploy
 #   ./pull.sh log          -> riwayat commit sampai commit terakhir di-deploy
 #   ./pull.sh status       -> cek status tanpa mengubah apa pun
 #   ./pull.sh tail         -> pantau log proses yang sedang jalan
+#   ./pull.sh full         -> mirror SELURUH server (berbahaya, baca header)
+#
+# KEAMANAN: pull memakai --changed-only + --no-commit supaya perubahan
+# lokal Anda tidak dihapus oleh 'mirror --delete' dan tidak ter-commit
+# tanpa izin. Baca pull.sh sebelum memakai aksi 'full'.
 #
 # Semua output dicatat ke .git-ftp-pull.log
 # Kredensial dibaca dari ~/.netrc, konfigurasi URL dari git config.
@@ -93,11 +98,26 @@ case "$ACTION" in
     log)    run git ftp log    "$@" ;;
     status) run git status --short --branch ;;
     pull)
-        info "Menarik semua file dari server. Ini bisa memakan waktu lama"
-        info "(puluhan menit untuk repo ini) karena memirror SELURUH isi htdocs/."
+        info "Mode aman: --changed-only --no-commit"
+        info "Hanya file yang berubah sejak deploy terakhir yang diunduh."
+        info "Perubahan lokal Anda tidak akan dihapus."
         info "Pantau dengan: ./pull.sh tail"
         echo
-        run git ftp pull "$@" || EXIT=$?
+        run git ftp pull --changed-only --no-commit "$@" || EXIT=$?
+        ;;
+    full)
+        warn "Mode PENUH: memirror SELURUH isi server dengan --delete."
+        warn "File lokal yang tidak ada di server AKAN dihapus."
+        warn "SBackup dulu: git status && git log --oneline -1"
+        echo
+        printf "Ketik 'ya' untuk lanjut: "
+        read -r jawab
+        if [ "$jawab" = "ya" ]; then
+            run git ftp pull "$@" || EXIT=$?
+        else
+            warn "Dibatalkan."
+            EXIT=0
+        fi
         ;;
     *)
         err "Pakai: $0 [pull|init|show|log|status|tail]"
@@ -115,9 +135,15 @@ if [ "$EXIT" -eq 0 ]; then
         if [ -n "$CONFLICT" ]; then
             warn "Ada konflik merge:"
             echo "$CONFLICT" | while read -r f; do warn "    $f"; done
-            warn "Selesaikan: git add <file> lalu git commit"
+            warn "Perbaiki, lalu: git add <file> && git commit"
         else
-            ok "Tidak ada konflik. HEAD sekarang: $(git rev-parse --short HEAD)"
+            ok "HEAD sekarang: $(git rev-parse --short HEAD)"
+        fi
+        if ! git diff --quiet || ! git diff --cached --quiet; then
+            warn "Perubahan belum di-commit (ini disengaja, --no-commit)."
+            warn "Periksa: git status --short"
+            warn "Simpan   : git add -A && git commit -m 'sinkron dari server'"
+            warn "Buang    : git merge --abort"
         fi
     fi
 else

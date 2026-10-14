@@ -1,0 +1,16 @@
+# File yang TIDAK boleh dihapus oleh 'git ftp pull' (mirror --delete).
+# Dipakai oleh aksi 'full' di pull.sh.
+# Pola = regex (bukan glob). Baris kosong dan yang diawali # diabaikan.
+
+# Data masukan yang hanya ada di server
+\.json$
+
+# Kredensial & konfigurasi lokal
+^\.netrc$
+^\.git-ftp-ignore$
+^\.env$
+
+# Log & artefak
+\.log$
+~$
+^\.#
