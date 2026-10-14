@@ -1,16 +1,25 @@
-# File yang TIDAK boleh dihapus oleh 'git ftp pull' (mirror --delete).
-# Dipakai oleh aksi 'full' di pull.sh.
-# Pola = regex (bukan glob). Baris kosong dan yang diawali # diabaikan.
+# File yang TIDAK ikut di-push ke server FTP.
+# File-file ini tetap di-commit dan di-push ke GitHub seperti biasa.
+#
+# Dipakai oleh git-ftp (upload) dan pull.sh --changed-only (download).
+# Pola = regex terhadap path relatif dari root repo, BUKAN glob.
+
+# Dokumentasi - tidak perlu ada di server
+(^|/)README\.md$
+\.md$
+
+# Script & konfigurasi lokal
+\.sh$
+\.example$
 
 # Data masukan yang hanya ada di server
 \.json$
 
-# Kredensial & konfigurasi lokal
+# Kredensial & konfigurasi
 ^\.netrc$
-^\.git-ftp-ignore$
 ^\.env$
 
-# Log & artefak
+# Log & artefak editor
 \.log$
 ~$
 ^\.#
