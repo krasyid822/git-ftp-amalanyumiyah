@@ -1,25 +1,22 @@
 # File yang TIDAK ikut di-push ke server FTP.
-# File-file ini tetap di-commit dan di-push ke GitHub seperti biasa.
+# File tetap di-commit dan di-push ke GitHub seperti biasa.
 #
-# Dipakai oleh git-ftp (upload) dan pull.sh --changed-only (download).
-# Pola = regex terhadap path relatif dari root repo, BUKAN glob.
+# PENTING: pola di sini adalah GLOB, bukan regex.
+#   *.md  benar        *.md$  SALAH (tidak match)
+#   Dipakai sebagai --exclude-glob oleh lftp.
+#
+# Dipakai oleh: git ftp push (upload) dan pull.sh (download)
 
 # Dokumentasi - tidak perlu ada di server
-(^|/)README\.md$
-\.md$
+*.md
 
 # Script & konfigurasi lokal
-\.sh$
-\.example$
+*.sh
+*.example
 
 # Data masukan yang hanya ada di server
-\.json$
+*.json
 
-# Kredensial & konfigurasi
-^\.netrc$
-^\.env$
-
-# Log & artefak editor
-\.log$
-~$
-^\.#
+# Kredensial
+.netrc
+.env
