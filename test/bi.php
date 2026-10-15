@@ -1395,6 +1395,8 @@ foreach ($categoryTotals as $categoryName => $stats) {
 	<?php if (!empty($manifestPath)) : ?>
 		<link rel="manifest" href="<?= bi_h($manifestPath) ?>">
 	<?php endif; ?>
+	<link rel="icon" type="image/png" sizes="192x192" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">
+	<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">
 	<link rel="preconnect" href="https://fonts.googleapis.com">
 	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 	<link href="https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,300;8..144,400;8..144,500;8..144,600;8..144,700&display=swap" rel="stylesheet">

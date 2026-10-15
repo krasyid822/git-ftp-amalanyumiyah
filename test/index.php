@@ -848,17 +848,16 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tracker Amalan Yaumiyah</title>
     <?php
-// Cek apakah variabel $manifestPath didefinisikan (menandakan kita di subfolder).
-if (isset($manifestPath)) {
-    // Jika di subfolder, HANYA cetak link manifest jika path-nya tidak kosong.
-    if (!empty($manifestPath)) {
-        echo '<link rel="manifest" href="' . htmlspecialchars($manifestPath) . '">';
-    }
-    // Jika $manifestPath kosong atau tidak ada, maka subfolder tidak akan punya manifest.
-} else {
-    // Jika kita TIDAK di subfolder (di folder induk), gunakan manifest default.
-    echo '<link rel="manifest" href="https://krasyid822.github.io/Drive/manifest.json">';
-}
+// Manifest PWA.
+// - Di folder mentee, $manifestPath sudah diisi oleh index.php mentee.
+// - Di /test/ (halaman pemilik), pakai manifest khusus test.
+// Jangan pakai manifest lama di krasyid822.github.io: server itu tidak
+// mengirim header CORS sehingga browser memblokirnya.
+$__manifestDefault = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/manifest_test.json';
+$__manifestHref = (isset($manifestPath) && $manifestPath !== '') ? $manifestPath : $__manifestDefault;
+echo '<link rel="manifest" href="' . htmlspecialchars($__manifestHref) . '">';
+echo '<link rel="icon" type="image/png" sizes="192x192" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">';
+echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">';
 ?>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
