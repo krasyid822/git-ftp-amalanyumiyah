@@ -1,4 +1,6 @@
 *.json
+# Konfigurasi target grup IKUT git (ini konfigurasi, bukan data user).
+!target_settings.json
 .netrc
 *.log
 test/_manifest/

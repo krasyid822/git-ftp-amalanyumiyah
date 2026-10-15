@@ -411,6 +411,118 @@ function adm_local_manifests(): array {
     return $out;
 }
 
+// ======================= TARGET SETTINGS (target_settings.json) =======================
+// Konfigurasi target per grup, dibaca test/bi.php untuk menghitung skor analisis.
+// Ditulis admin.php agar tidak lagi bergantung pada file manual yang ter-ignore.
+
+/** Path file target settings sebuah grup. */
+function adm_target_file(string $root, string $group): string {
+    return $root . '/' . $group . '/target_settings.json';
+}
+
+/** Baca target_settings.json sebuah grup. Kembalikan [] bila tidak ada/rusak. */
+function adm_read_targets(string $root, string $group): array {
+    $file = adm_target_file($root, $group);
+    if (!is_file($file)) return [];
+    $data = json_decode((string) @file_get_contents($file), true);
+    return is_array($data) ? $data : [];
+}
+
+/** Encode data target untuk ditempel di <script type="application/json">. */
+function adm_targets_json(array $data): string {
+    $json = json_encode(
+        $data,
+        JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT
+        | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
+    );
+    return $json === false ? '{}' : $json;
+}
+
+/** Tulis data target ke file. */
+function adm_write_targets(string $file, array $data): array {
+    $json = json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return ['ok' => false, 'error' => 'Gagal meng-encode JSON target.'];
+    }
+    if (@file_put_contents($file, $json . "\n") === false) {
+        return ['ok' => false, 'error' => "Gagal menulis $file. Periksa hak akses folder."];
+    }
+    return ['ok' => true];
+}
+
+/**
+ * Bersihkan data dari editor sebelum ditulis: hanya key yang dikenal yang
+ * disimpan, agar file tidak diisi sampah. Urutan key dibuat rapi.
+ */
+function adm_normalize_targets(array $raw, string $group): array {
+    $str = static fn($v, string $d = ''): string => is_scalar($v) ? trim((string) $v) : $d;
+    $num = static function ($v, float $d = 0.0): float {
+        return is_numeric($v) ? (float) $v : $d;
+    };
+
+    $out = [
+        'group'    => strtoupper($str($raw['group'] ?? '', strtoupper($group))),
+        'title'    => $str($raw['title'] ?? ''),
+        'greeting' => $str($raw['greeting'] ?? ''),
+        'intro'    => $str($raw['intro'] ?? ''),
+        'closing'  => $str($raw['closing'] ?? ''),
+        'tag'      => $str($raw['tag'] ?? ''),
+        'rules'    => [],
+    ];
+
+    $validModes   = ['day_presence', 'value_count', 'filled_key_count', 'rawatib_count', 'numeric', 'quran_sheet_count'];
+    $validPeriods = ['day', 'week', 'month'];
+
+    foreach ((array) ($raw['rules'] ?? []) as $rule) {
+        if (!is_array($rule)) continue;
+
+        $mode = strtolower($str($rule['mode'] ?? 'day_presence'));
+        if (!in_array($mode, $validModes, true)) $mode = 'day_presence';
+
+        $period = strtolower($str($rule['period'] ?? 'day'));
+        if (!in_array($period, $validPeriods, true)) $period = 'day';
+
+        $keys = [];
+        foreach ((array) ($rule['data_keys'] ?? []) as $k) {
+            $k = $str($k);
+            if ($k !== '') $keys[] = $k;
+        }
+
+        $clean = [
+            'category'     => $str($rule['category'] ?? ''),
+            'label'        => $str($rule['label'] ?? ''),
+            'target'       => $str($rule['target'] ?? ''),
+            'period'       => $period,
+            'target_count' => $num($rule['target_count'] ?? 1, 1.0),
+            'mode'         => $mode,
+        ];
+
+        if ($mode === 'value_count') {
+            $clean['match_value'] = $str($rule['match_value'] ?? '');
+        } elseif ($mode === 'rawatib_count') {
+            $clean['rakaat_per_check'] = $num($rule['rakaat_per_check'] ?? 2, 2.0);
+        } elseif ($mode === 'numeric') {
+            $clean['threshold'] = $num($rule['threshold'] ?? ($rule['target_count'] ?? 1), 1.0);
+        } elseif ($mode === 'quran_sheet_count') {
+            $clean['pages_per_sheet'] = $num($rule['pages_per_sheet'] ?? 2, 2.0);
+            $dataset = $str($rule['source_dataset'] ?? '');
+            if ($dataset !== '') $clean['source_dataset'] = $dataset;
+        } elseif ($mode === 'day_presence' || $mode === 'filled_key_count') {
+            $clean['logic'] = strtolower($str($rule['logic'] ?? 'all')) === 'any' ? 'any' : 'all';
+        }
+
+        $clean['detail']     = $str($rule['detail'] ?? '');
+        $clean['data_keys']  = $keys;
+
+        // Buang aturan yang benar-benar kosong.
+        if ($clean['label'] === '' && $clean['category'] === '' && !$keys) continue;
+
+        $out['rules'][] = $clean;
+    }
+
+    return $out;
+}
+
 // ======================= AKSI (AJAX) =======================
 $action = $_POST['action'] ?? '';
 
@@ -432,7 +544,18 @@ if ($action !== '') {
                 $new = $root . '/' . $slug;
                 mkdir($new, 0755, true);
                 copy($tpl . '/index.php', $new . '/index.php');
-                copy($tpl . '/target_settings.json', $new . '/target_settings.json');
+
+                // target_settings.json: salin template, lalu isi nama grup sebenarnya
+                // (template memakai placeholder "GROUP"). Bisa diubah lagi dari editor target.
+                $tplTargets = json_decode((string) @file_get_contents($tpl . '/target_settings.json'), true);
+                if (!is_array($tplTargets)) $tplTargets = [];
+                $tplTargets = adm_normalize_targets($tplTargets, $slug);
+                $tplTargets['group'] = strtoupper($slug);
+                if ($tplTargets['tag'] !== '') {
+                    $tplTargets['tag'] = str_replace('GROUP', strtoupper($slug), $tplTargets['tag']);
+                }
+                adm_write_targets(adm_target_file($root, $slug), $tplTargets);
+
                 $reply['ok'] = true;
                 $reply['messages'][] = adm_msg("Grup '$slug' dibuat.");
             }
@@ -485,6 +608,33 @@ if ($action !== '') {
                         file_put_contents($dest . '/data_amalan.json', "{}\n");
                         $reply['ok'] = true;
                         $reply['messages'][] = adm_msg("Mentee '$slug' dibuat di grup '$group'.");
+                    }
+                }
+            }
+        }
+
+        // ---- Target settings grup (target_settings.json) ----
+        if ($action === 'save_targets') {
+            $group = trim((string) ($_POST['group'] ?? ''));
+
+            if (!adm_valid_name($group) || !is_dir($root . '/' . $group)) {
+                $reply['messages'][] = adm_msg('Grup tidak ditemukan.', 'err');
+            } else {
+                $raw  = (string) ($_POST['settings'] ?? '');
+                $data = json_decode($raw, true);
+
+                if (!is_array($data)) {
+                    $reply['messages'][] = adm_msg('Data target tidak valid (bukan JSON).', 'err');
+                } else {
+                    $clean = adm_normalize_targets($data, $group);
+                    $res   = adm_write_targets(adm_target_file($root, $group), $clean);
+                    if ($res['ok']) {
+                        $reply['ok'] = true;
+                        $reply['messages'][] = adm_msg(
+                            "Target grup '$group' disimpan (" . count($clean['rules']) . ' aturan).'
+                        );
+                    } else {
+                        $reply['messages'][] = adm_msg($res['error'], 'err');
                     }
                 }
             }
@@ -785,6 +935,27 @@ tr:last-child td{border-bottom:0}
 .hint{color:var(--muted);font-size:.82rem;line-height:1.6;margin:10px 0 0}
 .empty{color:var(--muted);padding:14px;text-align:center;font-size:.9rem}
 code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
+
+/* --- Editor target_settings.json --- */
+details.tgt{margin-top:14px;border:1px solid var(--line);border-radius:12px;background:var(--surface2)}
+details.tgt>summary{cursor:pointer;padding:11px 14px;font-weight:700;font-size:.88rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap;list-style:none}
+details.tgt>summary::-webkit-details-marker{display:none}
+details.tgt>summary::before{content:'▸';color:var(--muted);font-size:.9rem}
+details.tgt[open]>summary::before{content:'▾'}
+.tgt-body{padding:2px 14px 16px}
+.tgt-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:10px 0}
+.tgt-field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.tgt-field>label{font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+.tgt-field input,.tgt-field select,.tgt-field textarea{background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:8px;padding:7px 9px;font:inherit;width:100%}
+.tgt-field textarea{min-height:54px;resize:vertical}
+.tgt-field small{color:var(--muted);font-size:.7rem;line-height:1.4}
+.tgt-rule{border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px;background:rgba(255,255,255,.015)}
+.tgt-rule-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px}
+.tgt-rule-head strong{font-size:.9rem}
+.tgt-sep{border:0;border-top:1px dashed var(--line2);margin:14px 0}
+.tgt-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.tgt-note{color:var(--muted);font-size:.78rem}
+button.small{padding:5px 10px;font-size:.75rem}
 </style>
 </head>
 <body>
@@ -796,6 +967,16 @@ code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
 </header>
 
 <ul class="msgs" id="msgs"></ul>
+
+<datalist id="tgt-cats">
+    <option value="SHOLAT WAJIB"></option>
+    <option value="SHOLAT SUNNAH"></option>
+    <option value="PUASA SUNNAH"></option>
+    <option value="TILAWAH"></option>
+    <option value="SEDEKAH"></option>
+    <option value="ALMATSURAT"></option>
+    <option value="ISTIGHFAR"></option>
+</datalist>
 
 <section class="panel">
     <h2>Buat Grup Baru</h2>
@@ -810,6 +991,8 @@ code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
     $mentes = adm_mentees($root . '/' . $g);
     $mentor = null;
     foreach ($mentes as $m) { if ($m['isMentor']) { $mentor = $m['name']; break; } }
+    $targets   = adm_read_targets($root, $g);
+    $ruleCount = is_array($targets['rules'] ?? null) ? count($targets['rules']) : 0;
 ?>
 <section class="panel">
     <h2><a href="../<?= adm_h($g) ?>/index.php" style="color:var(--text);text-decoration:none"><?= adm_h($g) ?></a>
@@ -853,6 +1036,15 @@ code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
         </tbody>
     </table>
     <?php endif; ?>
+
+    <details class="tgt" data-group="<?= adm_h($g) ?>">
+        <summary>Target &amp; analisis <code>target_settings.json</code>
+            <span class="tag <?= $ruleCount ? 'mentee' : 'muted' ?>"><?= $ruleCount ?> aturan</span>
+            <?php if (!is_file(adm_target_file($root, $g))): ?><span class="tag trash">file belum ada</span><?php endif; ?>
+        </summary>
+        <script type="application/json" class="tgt-data"><?= adm_targets_json($targets) ?></script>
+        <div class="tgt-body"></div>
+    </details>
 </section>
 <?php endforeach; ?>
 
@@ -969,6 +1161,192 @@ function doAction(el){
         })
         .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
 }
+
+// ===================== Editor target_settings.json =====================
+(function(){
+    const MODES = [
+        ['day_presence','day_presence — harian terisi'],
+        ['value_count','value_count — hitung nilai tertentu'],
+        ['filled_key_count','filled_key_count — hitung key terisi'],
+        ['rawatib_count','rawatib_count — jumlah rakaat'],
+        ['numeric','numeric — ambang angka'],
+        ['quran_sheet_count','quran_sheet_count — lembar Al-Quran'],
+    ];
+    const PERIODS = [['day','per hari'],['week','per pekan'],['month','per bulan']];
+    const MODE_FIELDS = {
+        day_presence:['logic'],
+        value_count:['match_value'],
+        filled_key_count:['logic'],
+        rawatib_count:['rakaat_per_check'],
+        numeric:['threshold'],
+        quran_sheet_count:['pages_per_sheet','source_dataset'],
+    };
+    const ALL_KEYS = ['subuh','dzuhur','ashar','maghrib','isya','rawatib','dhuha','tahajud',
+                      'senin_kamis','ayamul_bidh','tilawah','sedekah','almatsurat_pagi','almatsurat_petang','istighfar'];
+
+    function mk(tag, props, ...kids){
+        const n = document.createElement(tag);
+        if (props) for (const k in props){
+            const v = props[k];
+            if (v == null) continue;
+            if (k === 'class') n.className = v;
+            else if (k === 'text') n.textContent = v;
+            else if (k === 'value') n.value = v;
+            else if (k.startsWith('on')) n.addEventListener(k.slice(2).toLowerCase(), v);
+            else n.setAttribute(k, v);
+        }
+        kids.flat().forEach(c => { if (c == null) return; n.appendChild(typeof c === 'string' ? document.createTextNode(c) : c); });
+        return n;
+    }
+    function field(label, el, hint){
+        return mk('div',{class:'tgt-field'}, mk('label',{text:label}), el, hint ? mk('small',{text:hint}) : null);
+    }
+    function inp(type, value, props){
+        return mk('input', Object.assign({type:type, value: value == null ? '' : value}, props||{}));
+    }
+    function sel(options, value){
+        const s = mk('select');
+        options.forEach(([v,t]) => s.appendChild(mk('option',{value:v, text:t})));
+        s.value = value;
+        if (s.selectedIndex < 0) s.selectedIndex = 0;
+        return s;
+    }
+
+    function ruleCard(rule){
+        const card = mk('div',{class:'tgt-rule'});
+        const title = mk('strong',{text: rule.label || 'Aturan baru'});
+        card.appendChild(mk('div',{class:'tgt-rule-head'},
+            title,
+            mk('button',{class:'warn small', type:'button', onclick(){ card.remove(); }}, 'Hapus')
+        ));
+
+        const f = {};
+        f.category = inp('text', rule.category||'', {list:'tgt-cats', placeholder:'SHOLAT WAJIB'});
+        f.label    = inp('text', rule.label||'');
+        f.target   = inp('text', rule.target||'', {placeholder:'3 kali per hari'});
+        f.period   = sel(PERIODS, rule.period||'day');
+        f.target_count = inp('number', rule.target_count != null ? rule.target_count : 1, {min:'0', step:'1'});
+        f.mode     = sel(MODES, rule.mode||'day_presence');
+        f.label.addEventListener('input', () => { title.textContent = f.label.value.trim() || 'Aturan baru'; });
+
+        card.appendChild(mk('div',{class:'tgt-grid'},
+            field('Kategori', f.category),
+            field('Label', f.label),
+            field('Target (teks)', f.target),
+            field('Periode', f.period),
+            field('Jumlah target', f.target_count),
+            field('Mode hitung', f.mode)
+        ));
+
+        // Field kondisional dibuat sekali, lalu ditampilkan sesuai mode.
+        const condEls = {
+            match_value:      field('Nilai dicocokkan (match_value)', inp('text', rule.match_value||'', {placeholder:'M'})),
+            rakaat_per_check: field('Rakaat per centang', inp('number', rule.rakaat_per_check != null ? rule.rakaat_per_check : 2, {min:'1', step:'1'})),
+            threshold:        field('Ambang (threshold)', inp('number', rule.threshold != null ? rule.threshold : (rule.target_count || 1), {min:'0'})),
+            pages_per_sheet:  field('Halaman per lembar', inp('number', rule.pages_per_sheet != null ? rule.pages_per_sheet : 2, {min:'1'})),
+            source_dataset:   field('Sumber dataset', inp('text', rule.source_dataset||'', {placeholder:'opsional'})),
+            logic:            field('Logika', sel([['all','semua key'],['any','salah satu']], rule.logic||'all'))
+        };
+        const condBox = mk('div',{class:'tgt-grid'});
+        function renderCond(){
+            condBox.innerHTML = '';
+            (MODE_FIELDS[f.mode.value]||[]).forEach(k => condBox.appendChild(condEls[k]));
+        }
+        f.mode.addEventListener('change', renderCond);
+        renderCond();
+        card.appendChild(condBox);
+
+        const keysEl = inp('text', (rule.data_keys||[]).join(', '));
+        card.appendChild(field('Data keys (pisahkan koma)', keysEl, 'Pilihan: ' + ALL_KEYS.join(', ')));
+
+        const detailEl = mk('textarea'); detailEl.value = rule.detail || '';
+        card.appendChild(field('Detail', detailEl));
+
+        card._read = () => {
+            const m = f.mode.value;
+            const out = {
+                category: f.category.value.trim(),
+                label: f.label.value.trim(),
+                target: f.target.value.trim(),
+                period: f.period.value,
+                target_count: Number(f.target_count.value) || 0,
+                mode: m,
+                detail: detailEl.value.trim(),
+                data_keys: keysEl.value.split(',').map(s => s.trim()).filter(Boolean),
+            };
+            (MODE_FIELDS[m]||[]).forEach(k => {
+                const el = condEls[k].querySelector('input, select, textarea');
+                if (!el) return;
+                out[k] = (el.tagName === 'SELECT') ? el.value
+                       : (el.type === 'number' ? (Number(el.value) || 0) : el.value.trim());
+            });
+            return out;
+        };
+        return card;
+    }
+
+    function build(root){
+        const script = root.querySelector('.tgt-data');
+        let data = {};
+        try { data = JSON.parse(script.textContent) || {}; } catch (e) { data = {}; }
+
+        const body = root.querySelector('.tgt-body');
+        body.innerHTML = '';
+
+        const tf = {
+            group:    inp('text', data.group||''),
+            tag:      inp('text', data.tag||''),
+            title:    inp('text', data.title||''),
+            greeting: inp('text', data.greeting||''),
+            intro:    inp('text', data.intro||''),
+            closing:  inp('text', data.closing||''),
+        };
+        body.appendChild(mk('div',{class:'tgt-grid'},
+            field('Group', tf.group), field('Tag', tf.tag),
+            field('Judul', tf.title), field('Sapaan', tf.greeting)
+        ));
+        body.appendChild(mk('div',{class:'tgt-grid'},
+            field('Intro', tf.intro), field('Closing', tf.closing)
+        ));
+
+        body.appendChild(mk('hr',{class:'tgt-sep'}));
+        body.appendChild(mk('div',{class:'tgt-note', text:'Aturan target (dipakai halaman analisis grup):'}));
+
+        const list = mk('div');
+        body.appendChild(list);
+        (Array.isArray(data.rules) ? data.rules : []).forEach(r => list.appendChild(ruleCard(r)));
+
+        function save(){
+            const settings = {
+                group: tf.group.value.trim(),
+                title: tf.title.value.trim(),
+                greeting: tf.greeting.value.trim(),
+                intro: tf.intro.value.trim(),
+                closing: tf.closing.value.trim(),
+                tag: tf.tag.value.trim(),
+                rules: Array.from(list.querySelectorAll('.tgt-rule'))
+                    .map(c => c._read())
+                    .filter(r => r.label || r.category || (r.data_keys && r.data_keys.length)),
+            };
+            const post = new URLSearchParams();
+            post.set('action','save_targets');
+            post.set('group', root.dataset.group);
+            post.set('settings', JSON.stringify(settings));
+            fetch('', {method:'POST', body:post, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+                .then(r => r.json())
+                .then(d => { show(d.messages); setTimeout(() => location.reload(), d.ok ? 700 : 300); })
+                .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
+        }
+
+        body.appendChild(mk('div',{class:'tgt-actions'},
+            mk('button',{class:'ghost', type:'button', onclick(){ list.appendChild(ruleCard({})); }}, '+ Tambah aturan'),
+            mk('button',{type:'button', onclick: save}, 'Simpan target'),
+            mk('span',{class:'tgt-note', text:'File: ' + root.dataset.group + '/target_settings.json'})
+        ));
+    }
+
+    document.querySelectorAll('details.tgt').forEach(build);
+})();
 </script>
 </body>
 </html>

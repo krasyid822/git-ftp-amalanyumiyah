@@ -14,8 +14,15 @@
 *.sh
 *.example
 
-# Data masukan yang hanya ada di server
-*.json
+# Data masukan yang hanya ada di server (jangan kirim/terima via FTP).
+# PENTING: target_settings.json SENGAJA tidak dikecualikan di sini, karena
+# itu konfigurasi grup yang harus ikut ter-deploy (dipakai test/bi.php).
+data_amalan.json
+*data_amalan.json
+hijri_cache.json
+*hijri_cache.json
+test/_manifest/*
+test/_manifest/.*
 
 # Kredensial
 .netrc
