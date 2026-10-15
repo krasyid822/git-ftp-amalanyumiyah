@@ -21,6 +21,8 @@
 //   .gitignore sehingga TIDAK ikut ke GitHub. Token tetap boleh ada di
 //   server FTP (ditulis langsung oleh admin.php saat Anda menempelnya
 //   di halaman admin), jadi tidak perlu di-push manual.
+//   Format yang diterima: fine-grained (github_pat_...) dengan repo manifest
+//   dipilih + izin "Contents: Read and write", atau classic (ghp_...) scope repo.
 
 date_default_timezone_set('Asia/Jakarta');
 
@@ -56,6 +58,27 @@ function adm_gh_token(): string {
     return trim((string) @file_get_contents(GITHUB_TOKEN_FILE));
 }
 
+/**
+ * Jenis token tersimpan: 'fine' (fine-grained, awalan github_pat_), 'classic'
+ * (ghp_/gho_/ghu_/ghs_/ghr_), 'lain' (tidak dikenali), atau '' (belum ada).
+ */
+function adm_gh_token_kind(): string {
+    $t = adm_gh_token();
+    if ($t === '') return '';
+    if (str_starts_with($t, 'github_pat_')) return 'fine';
+    if (preg_match('/^gh[pousr]_/', $t))    return 'classic';
+    return 'lain';
+}
+
+/** Benar bila teks cocok dengan format token GitHub (fine-grained atau classic). */
+function adm_gh_token_format_ok(string $token): bool {
+    // Fine-grained: github_pat_<22 chars>_<59 chars> (boleh ada '_' di tengah).
+    if (preg_match('/^github_pat_[A-Za-z0-9_]{20,255}$/', $token)) return true;
+    // Classic: ghp_/gho_/ghu_/ghs_/ghr_ diikuti alfanumerik.
+    if (preg_match('/^gh[pousr]_[A-Za-z0-9]{20,255}$/', $token)) return true;
+    return false;
+}
+
 function adm_gh_token_set(string $token): array {
     if (!is_dir(MANIFEST_LOCAL_DIR)) mkdir(MANIFEST_LOCAL_DIR, 0755, true);
     $token = trim($token);
@@ -64,21 +87,46 @@ function adm_gh_token_set(string $token): array {
         if (is_file(GITHUB_TOKEN_FILE)) @unlink(GITHUB_TOKEN_FILE);
         return ['ok' => true, 'msg' => 'Token dihapus.'];
     }
-    if (!preg_match('/^gh[pousr]_[A-Za-z0-9]{20,255}$/', $token)) {
-        return ['ok' => false, 'msg' => 'Format token tidak dikenali.'];
+    if (!adm_gh_token_format_ok($token)) {
+        return ['ok' => false, 'msg' => 'Format token tidak dikenali. Pakai fine-grained (awalan github_pat_) atau classic (awalan ghp_).'];
     }
+    $kind = str_starts_with($token, 'github_pat_') ? 'fine-grained' : 'classic';
+
+    // Simpan sementara supaya adm_gh_api() bisa memakainya untuk verifikasi.
     if (@file_put_contents(GITHUB_TOKEN_FILE, $token . "\n") === false) {
-        return ['ok' => false, 'msg' => 'Gagal menulis file token. Periksa hak akses folder.'];
+        return ['ok' => false, 'msg' => 'Gagal menulis file token. Periksa hak akses folder test/_manifest/.'];
     }
     @chmod(GITHUB_TOKEN_FILE, 0600);
 
-    // Verifikasi token benar-benar bekerja sebelum disimpan permanen.
-    $me = adm_gh_api('GET', 'https://api.github.com/user');
-    if (!$me['ok']) {
+    // Verifikasi nyata: token HARUS bisa membaca repo manifest. Untuk fine-grained
+    // ini sekaligus memastikan repo sudah dipilih saat token dibuat.
+    $repo = adm_gh_api('GET', 'https://api.github.com/repos/' . MANIFEST_REPO);
+    if (!$repo['ok']) {
         @unlink(GITHUB_TOKEN_FILE);
-        return ['ok' => false, 'msg' => 'Token ditolak GitHub: ' . $me['error']];
+        $hint = $kind === 'fine-grained'
+            ? ' Untuk fine-grained token: pilih "Only select repositories" lalu centang ' . MANIFEST_REPO
+              . ', dan beri izin "Contents: Read and write".'
+            : '';
+        return ['ok' => false, 'msg' => "Token $kind tidak bisa mengakses " . MANIFEST_REPO . ': ' . $repo['error'] . $hint];
     }
-    return ['ok' => true, 'msg' => "Token tersimpan & terverifikasi sebagai @{$me['data']['login']}."];
+
+    // Nama akun bersifat opsional: sebagian token fine-grained membatasi /user,
+    // jadi kegagalan di sini TIDAK dianggap gagal menyimpan.
+    $login = '';
+    $me = adm_gh_api('GET', 'https://api.github.com/user');
+    if ($me['ok']) $login = (string) ($me['data']['login'] ?? '');
+    $who = $login !== '' ? "@$login" : 'token ini';
+
+    // Cek izin tulis bila GitHub memberitahukannya.
+    $perm = is_array($repo['data']['permissions'] ?? null) ? $repo['data']['permissions'] : null;
+    if ($perm === null) {
+        return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses ke " . MANIFEST_REPO . ' OK.'];
+    }
+    if (empty($perm['push'])) {
+        return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Peringatan: GitHub belum menandai izin tulis ke "
+            . MANIFEST_REPO . ' — pastikan "Contents: Read and write" agar manifest bisa ditulis.'];
+    }
+    return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses baca+tulis ke " . MANIFEST_REPO . ' OK.'];
 }
 
 /**
@@ -122,11 +170,21 @@ function adm_gh_api(string $method, string $url, ?array $body = null): array {
     $data = json_decode((string) $res, true);
 
     if ($code < 200 || $code >= 300) {
-        $msg = $data['message'] ?? ('HTTP ' . $code);
-        if ($code === 401)      $msg = 'Token ditolak atau kedaluwarsa.';
-        elseif ($code === 403)  $msg = 'Akses ditolak. Cek scopes token (butuh "contents").';
-        elseif ($code === 404)  $msg = 'Repo/file tidak ditemukan. Cek repo & branch.';
-        elseif ($code === 409)  $msg = 'Konflik SHA - file berubah, muat ulang lalu coba lagi.';
+        $raw = (string) ($data['message'] ?? ('HTTP ' . $code));
+        $noAcc = stripos($raw, 'not accessible by personal access token') !== false;
+        $msg = $raw;
+        if ($code === 401) {
+            $msg = 'Token ditolak atau kedaluwarsa.';
+        } elseif ($code === 403) {
+            $msg = $noAcc
+                ? 'Token tidak punya izin ke resource ini. Untuk fine-grained token: pilih repo ' . MANIFEST_REPO . ' dan beri "Contents: Read and write".'
+                : 'Akses ditolak. Cek izin token (butuh "Contents: Read and write").';
+        } elseif ($code === 404) {
+            $extra = $noAcc ? '' : ' (Untuk fine-grained token: pastikan repo ' . MANIFEST_REPO . ' sudah dipilih & diberi izin.)';
+            $msg = 'Repo/file tidak ditemukan. Cek repo & branch.' . $extra;
+        } elseif ($code === 409) {
+            $msg = 'Konflik SHA - file berubah, muat ulang lalu coba lagi.';
+        }
         return ['ok' => false, 'error' => $msg, 'code' => $code];
     }
 
@@ -461,6 +519,7 @@ function adm_write_manifest(string $mentee, string $group, bool $isMentor): arra
     if (@file_put_contents($file, $json . "\n") === false) {
         return ['ok' => false, 'error' => "Gagal menulis $file. Periksa hak akses folder."];
     }
+    adm_prune_local_manifests();
 
     return ['ok' => true, 'file' => $file, 'url' => adm_manifest_raw_url($mentee), 'json' => $json . "\n"];
 }
@@ -511,6 +570,37 @@ function adm_local_manifests(): array {
 }
 
 /**
+ * Manifest lokal yang selalu dipertahankan walau tidak terkait grup/mentee mana pun.
+ * `manifest_test.json` diurus terpisah (untuk halaman test/), bukan oleh admin.php.
+ */
+const MANIFEST_KEEP = ['manifest_test.json'];
+
+/**
+ * Hapus salinan lokal manifest yang sudah tidak dipakai, supaya folder
+ * test/_manifest/ tidak menumpuk sisa mentee/grup yang sudah dihapus.
+ * Yang dipertahankan: manifest tiap grup aktif di root + manifest tiap menteenya,
+ * plus MANIFEST_KEEP. File .token tidak pernah disentuh (bukan pola manifest_*.json).
+ */
+function adm_prune_local_manifests(): void {
+    $have = adm_local_manifests();
+    if (!$have) return;
+
+    $expect = array_fill_keys(MANIFEST_KEEP, true);
+    foreach (adm_groups(ADMIN_ROOT) as $g) {
+        $expect[adm_group_manifest_filename($g)] = true;
+        foreach (adm_mentees(ADMIN_ROOT . '/' . $g) as $m) {
+            $expect[adm_manifest_filename($m['name'])] = true;
+        }
+    }
+
+    foreach ($have as $f) {
+        if (!isset($expect[$f['file']])) {
+            @unlink(MANIFEST_LOCAL_DIR . '/' . $f['file']);
+        }
+    }
+}
+
+/**
  * Tuliskan/ubah baris $manifestPath di sebuah file index.php.
  * Mengganti nilai lama apa pun (termasuk placeholder). Bila baris belum ada,
  * disisipkan tepat setelah tag <?php.
@@ -547,6 +637,7 @@ function adm_write_group_manifest(string $group): array {
     if (@file_put_contents($file, $json . "\n") === false) {
         return ['ok' => false, 'error' => "Gagal menulis $file. Periksa hak akses folder."];
     }
+    adm_prune_local_manifests();
 
     return ['ok' => true, 'file' => $file, 'url' => adm_group_manifest_raw_url($group), 'json' => $json . "\n"];
 }
@@ -1247,18 +1338,32 @@ if ($action !== '') {
         }
 
         if ($action === 'test_gh') {
+            $kind = adm_gh_token_kind();
+            $reply['messages'][] = adm_msg('Token terdeteksi: ' . ($kind === 'fine' ? 'fine-grained' : ($kind === 'classic' ? 'classic' : 'tidak dikenali')) . '.');
+            // /user opsional: sebagian token fine-grained membatasinya.
             $me = adm_gh_api('GET', 'https://api.github.com/user');
             if ($me['ok']) {
-                $reply['ok'] = true;
                 $reply['messages'][] = adm_msg("Tersambung sebagai @{$me['data']['login']}.");
-                $repo = adm_gh_api('GET', 'https://api.github.com/repos/' . MANIFEST_REPO);
-                if ($repo['ok']) {
-                    $reply['messages'][] = adm_msg("Repo '{$repo['data']['full_name']}' dapat diakses (branch default: {$repo['data']['default_branch']}).");
-                } else {
-                    $reply['messages'][] = adm_msg('Repo tidak bisa diakses: ' . $repo['error'], 'err');
+            } else {
+                $reply['messages'][] = adm_msg('Info akun tidak tersedia (' . $me['error'] . '). Lanjut cek repo.', 'err');
+            }
+            // Yang wajib: akses ke repo manifest, plus izin tulis bila diketahui.
+            $repo = adm_gh_api('GET', 'https://api.github.com/repos/' . MANIFEST_REPO);
+            if ($repo['ok']) {
+                $reply['ok'] = true;
+                $reply['messages'][] = adm_msg("Repo '{$repo['data']['full_name']}' dapat diakses (branch default: {$repo['data']['default_branch']}).");
+                $perm = is_array($repo['data']['permissions'] ?? null) ? $repo['data']['permissions'] : null;
+                if ($perm !== null) {
+                    $canPush = !empty($perm['push']);
+                    $reply['messages'][] = adm_msg(
+                        $canPush ? 'Izin tulis (Contents: Read and write): tersedia.'
+                                 : 'Izin tulis BELUM terdeteksi — pastikan "Contents: Read and write" pada token.',
+                        $canPush ? 'ok' : 'err'
+                    );
                 }
             } else {
-                $reply['messages'][] = adm_msg($me['error'], 'err');
+                $reply['ok'] = false;
+                $reply['messages'][] = adm_msg('Repo tidak bisa diakses: ' . $repo['error'], 'err');
             }
         }
 
@@ -1290,21 +1395,19 @@ if ($action !== '') {
             if (!adm_valid_name($group) || !adm_valid_name($name)) {
                 $reply['messages'][] = adm_msg('Nama grup atau mentee tidak valid.', 'err');
             } else {
-                // Generate dari sumber kebenaran, lalu tulis langsung ke repo.
-                $manifest = adm_build_manifest($name, $group, is_file($root . '/' . $group . '/' . $name . '/' . MENTOR_FLAG));
-                $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
-
-                // Simpan salinan lokal sebagai cadangan.
-                if (!is_dir(MANIFEST_LOCAL_DIR)) mkdir(MANIFEST_LOCAL_DIR, 0755, true);
-                @file_put_contents(MANIFEST_LOCAL_DIR . '/' . adm_manifest_filename($name), $json . "\n");
-
-                $r = adm_gh_put(adm_manifest_filename($name), $json . "\n", "manifest: $group/$name");
-                if ($r['ok']) {
-                    $reply['ok'] = true;
-                    $reply['messages'][] = adm_msg("Manifest '$name' ditulis ke repo " . MANIFEST_REPO . '.');
-                    $reply['messages'][] = adm_msg('Raw: ' . adm_manifest_raw_url($name));
+                // Generate dari sumber kebenaran, simpan salinan lokal, lalu tulis ke repo.
+                $res = adm_write_manifest($name, $group, is_file($root . '/' . $group . '/' . $name . '/' . MENTOR_FLAG));
+                if (!$res['ok']) {
+                    $reply['messages'][] = adm_msg($res['error'], 'err');
                 } else {
-                    $reply['messages'][] = adm_msg('Gagal menulis ke repo: ' . $r['error'], 'err');
+                    $r = adm_gh_put(adm_manifest_filename($name), $res['json'], "manifest: $group/$name");
+                    if ($r['ok']) {
+                        $reply['ok'] = true;
+                        $reply['messages'][] = adm_msg("Manifest '$name' ditulis ke repo " . MANIFEST_REPO . '.');
+                        $reply['messages'][] = adm_msg('Raw: ' . adm_manifest_raw_url($name));
+                    } else {
+                        $reply['messages'][] = adm_msg('Gagal menulis ke repo: ' . $r['error'], 'err');
+                    }
                 }
             }
         }
@@ -1323,13 +1426,10 @@ if ($action !== '') {
                 }
 
                 foreach (adm_subfolders($root . '/' . $g) as $m) {
-                    $manifest = adm_build_manifest($m, $g, is_file($root . '/' . $g . '/' . $m . '/' . MENTOR_FLAG));
-                    $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+                    $res = adm_write_manifest($m, $g, is_file($root . '/' . $g . '/' . $m . '/' . MENTOR_FLAG));
+                    if (!$res['ok']) { $fail++; $errors[] = "$m: " . $res['error']; continue; }
 
-                    if (!is_dir(MANIFEST_LOCAL_DIR)) mkdir(MANIFEST_LOCAL_DIR, 0755, true);
-                    @file_put_contents(MANIFEST_LOCAL_DIR . '/' . adm_manifest_filename($m), $json . "\n");
-
-                    $r = adm_gh_put(adm_manifest_filename($m), $json . "\n", "manifest: $g/$m");
+                    $r = adm_gh_put(adm_manifest_filename($m), $res['json'], "manifest: $g/$m");
                     if ($r['ok']) $ok++;
                     else { $fail++; $errors[] = "$m: " . $r['error']; }
                 }
@@ -1475,6 +1575,7 @@ if ($action !== '') {
                 if (rename($src, $dest)) {
                     $reply['ok'] = true;
                     $reply['messages'][] = adm_msg("'$name' dipindahkan ke tempat sampah (dapat dipulihkan).");
+                    adm_prune_local_manifests(); // buang salinan manifest yang sudah tak dipakai
                 } else {
                     $reply['messages'][] = adm_msg('Gagal memindahkan.', 'err');
                 }
@@ -1560,6 +1661,7 @@ if ($action !== '') {
                 if (rename($src, $dest)) {
                     $reply['ok'] = true;
                     $reply['messages'][] = adm_msg("'$name' ditandai tidak lagi mentoring.");
+                    adm_prune_local_manifests();
                 } else {
                     $reply['messages'][] = adm_msg('Gagal menandai mentee.', 'err');
                 }
@@ -1627,6 +1729,7 @@ if ($action !== '') {
                     $reply['messages'][] = adm_msg(
                         "Grup '$group' beserta seluruh mentee dipindahkan ke tempat sampah (dapat dipulihkan)."
                     );
+                    adm_prune_local_manifests();
                 } else {
                     $reply['messages'][] = adm_msg('Gagal memindahkan grup ke tempat sampah.', 'err');
                 }
@@ -1647,6 +1750,35 @@ if ($action !== '') {
             } elseif (rename($src, $root . '/' . $group)) {
                 $reply['ok'] = true;
                 $reply['messages'][] = adm_msg("Grup '$group' dipulihkan dari tempat sampah.");
+
+                // Salinan manifest lokal dibuang saat grup dihapus (lihat trash_group).
+                // Buat ulang agar folder test/_manifest/ kembali mencerminkan keadaan kini.
+                $newDir = $root . '/' . $group;
+                $gm = adm_write_group_manifest($group);
+                if ($gm['ok'] && adm_gh_token() !== '') {
+                    $pr = adm_gh_put(adm_group_manifest_filename($group), $gm['json'], "manifest: grup $group");
+                    $reply['messages'][] = adm_msg(
+                        $pr['ok'] ? "Manifest grup '$group' diterbitkan ulang ke repo."
+                                  : "Manifest grup lokal dibuat, tapi gagal ke repo: {$pr['error']}",
+                        $pr['ok'] ? 'ok' : 'err'
+                    );
+                } elseif ($gm['ok']) {
+                    $reply['messages'][] = adm_msg(
+                        "Manifest grup '$group' dibuat lokal. Terbitkan lewat tombol 'Tulis manifest grup'.", 'ok'
+                    );
+                }
+
+                $mOk = 0; $mErr = 0;
+                foreach (adm_subfolders($newDir) as $m) {
+                    $msgs = adm_publish_mentee_manifest($root, $group, $m, is_file($newDir . '/' . $m . '/' . MENTOR_FLAG));
+                    foreach ($msgs as $mm) (($mm['type'] ?? '') === 'err') ? $mErr++ : $mOk++;
+                }
+                if ($mOk || $mErr) {
+                    $reply['messages'][] = adm_msg(
+                        "$mOk langkah manifest mentee dibuat ulang" . ($mErr ? ", $mErr gagal." : '.'),
+                        $mErr ? 'err' : 'ok'
+                    );
+                }
             } else {
                 $reply['messages'][] = adm_msg('Gagal memulihkan grup.', 'err');
             }
@@ -1732,6 +1864,8 @@ tr.out>td{background:rgba(200,176,255,.06)}
 .msgs li{padding:8px 12px;border-radius:9px;margin-bottom:7px;font-size:.88rem}
 .msgs .ok{background:rgba(143,240,176,.1);border:1px solid rgba(143,240,176,.3);color:var(--ok)}
 .msgs .err{background:rgba(255,139,139,.1);border:1px solid rgba(255,139,139,.3);color:var(--danger)}
+.gh-file-list{margin:8px 0 0;padding-left:18px;font-size:.85rem;line-height:1.8}
+.gh-file-list a{color:var(--accent)}
 .hint{color:var(--muted);font-size:.82rem;line-height:1.6;margin:10px 0 0}
 .empty{color:var(--muted);padding:14px;text-align:center;font-size:.9rem}
 code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
@@ -1990,21 +2124,25 @@ button.small{padding:5px 10px;font-size:.75rem}
     </p>
 
     <h3 style="font-size:.95rem;margin:18px 0 8px;color:var(--muted)">1. Token GitHub</h3>
-    <?php if (adm_gh_token() !== ''): ?>
-        <p class="hint">Token tersimpan di <code>test/_manifest/.token</code> (mode 600, tidak ikut ke git/server).</p>
+    <?php $tokKind = adm_gh_token_kind(); ?>
+    <?php if ($tokKind !== ''): ?>
+        <p class="hint">Token <strong><?= $tokKind === 'fine' ? 'fine-grained' : ($tokKind === 'classic' ? 'classic' : 'tidak dikenali') ?></strong>
+           tersimpan di <code>test/_manifest/.token</code> (mode 600, tidak ikut ke git/server).</p>
         <div class="row" style="margin:10px 0">
-            <button class="ghost" data-act="test_gh">Uji koneksi</button>
-            <button class="ghost" data-act="gh_list">Daftar file di repo</button>
-            <button class="warn" data-act="set_token" data-empty="1">Hapus token</button>
+            <button class="ghost" data-act="test_gh" data-noreload="1">Uji koneksi</button>
+            <button class="ghost" data-act="gh_list" data-noreload="1">Daftar file di repo</button>
+            <button class="warn" data-act="set_token" data-empty="1" data-from-field="token">Hapus token</button>
         </div>
     <?php else: ?>
         <p class="hint">Belum ada token. Buat <em>Fine-grained personal access token</em> di GitHub
           (<code>Settings &rsaquo; Developer settings &rsaquo; Personal access tokens &rsaquo; Fine-grained tokens</code>),
-          beri akses <strong>Contents: Read and write</strong> pada repo
-          <code><?= adm_h(MANIFEST_REPO) ?></code>. Token berawalan <code>github_pat_</code>.</p>
+          lalu pada <strong>Repository access</strong> pilih <em>Only select repositories</em> dan centang
+          <code><?= adm_h(MANIFEST_REPO) ?></code>, dengan izin <strong>Contents: Read and write</strong>.
+          Token berawalan <code>github_pat_</code>.</p>
+        <p class="hint">Token <em>classic</em> (<code>ghp_...</code>) dengan scope <code>repo</code> juga diterima.</p>
         <div class="row" style="margin:10px 0">
             <input type="text" id="gh-token" placeholder="github_pat_..." autocomplete="off" spellcheck="false">
-            <button data-act="set_token" data-from="gh-token">Simpan token</button>
+            <button data-act="set_token" data-from="gh-token" data-from-field="token">Simpan token</button>
         </div>
     <?php endif; ?>
 
@@ -2039,10 +2177,35 @@ function show(list){
     msgs.innerHTML = '';
     (list||[]).forEach(m=>{
         const li = document.createElement('li');
-        li.className = m.type;
+        li.className = m.type || '';
         li.textContent = m.text;
         msgs.appendChild(li);
     });
+    // Geser ke area pesan supaya hasilnya terlihat walau tombol diklik jauh di bawah.
+    if ((list||[]).length) msgs.scrollIntoView({block:'center', behavior:'smooth'});
+}
+// Daftar file dari aksi 'gh_list' (dikirim server sebagai d.files).
+function renderFiles(files){
+    const box = document.getElementById('gh-files');
+    if (!box) return;
+    if (!files || !files.length){
+        box.innerHTML = '<p class="hint">Tidak ada file <code>manifest_*.json</code> di repo.</p>';
+        return;
+    }
+    box.textContent = '';
+    const ul = document.createElement('ul');
+    ul.className = 'gh-file-list';
+    files.forEach(f => {
+        const li = document.createElement('li');
+        const a = document.createElement('a');
+        a.href = f.url; a.target = '_blank'; a.rel = 'noopener';
+        a.textContent = f.name;
+        li.appendChild(a);
+        li.appendChild(document.createTextNode(' · ' + f.size + ' B'));
+        ul.appendChild(li);
+    });
+    box.appendChild(ul);
+    box.scrollIntoView({block:'center', behavior:'smooth'});
 }
 document.querySelectorAll('[data-act]').forEach(el=>{
     // Checkbox/select/input pakai 'change' saja. Sebelumnya keduanya dipasang,
@@ -2068,19 +2231,33 @@ function doAction(el){
 
     if (el.dataset.from){
         const input = document.getElementById(el.dataset.from);
-        const v = input.value.trim();
-        if (!v){ show([{type:'err', text:'Nama tidak boleh kosong.'}]); return; }
-        if (el.dataset.act === 'create_group') body.set('name', v);
-        else body.set('name', v);
-        input.value = '';
+        const v = input ? input.value.trim() : '';
+        const field = el.dataset.fromField || 'name';
+        if (!v){
+            show([{type:'err', text: field === 'name' ? 'Nama tidak boleh kosong.' : 'Isian tidak boleh kosong.'}]);
+            return;
+        }
+        body.set(field, v);
+        // Kolom nama dikosongkan setelah dipakai (buat grup/mentee). Kolom token
+        // dibiarkan agar mudah diperbaiki bila verifikasi gagal.
+        if (field === 'name') input.value = '';
+    } else if (el.dataset.empty !== undefined){
+        body.set(el.dataset.fromField || 'name', '');
     }
+
+    // Umpan balik segera: panggilan GitHub bisa perlu beberapa detik, supaya
+    // tombol tidak terasa "tidak menghasilkan apa-apa".
+    show([{text:'Memproses…'}]);
 
     fetch('', {method:'POST', body, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
         .then(r => r.json())
         .then(d => {
             show(d.messages);
-            // Muat ulang supaya tabel ikut berubah
-            setTimeout(() => location.reload(), d.ok ? 700 : 200);
+            if (Array.isArray(d.files)) renderFiles(d.files);
+            // Muat ulang hanya bila berhasil DAN aksi memang mengubah tampilan
+            // tabel. Aksi informasi (Uji koneksi, Daftar file) ditandai
+            // data-noreload supaya hasilnya tidak langsung hilang.
+            if (d.ok && el.dataset.noreload === undefined) setTimeout(() => location.reload(), 700);
         })
         .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
 }
