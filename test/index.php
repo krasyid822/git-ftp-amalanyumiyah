@@ -2809,6 +2809,9 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             z-index: 1000;
             min-width: 240px;
             max-width: 320px;
+            max-height: min(70vh, 520px);
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             animation: popoverFadeIn 0.2s cubic-bezier(0.2, 0, 0, 1);
             color: var(--md-sys-color-on-surface);
         }
@@ -2887,7 +2890,104 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             color: #FFF;
             border-color: var(--md-sys-color-primary);
         }
-        
+
+        /* Rawatib: input berbentuk kartu (bukan checkbox polos) */
+        .rawatib-cards {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .rawatib-card {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--md-sys-color-outline-variant);
+            border-radius: 12px;
+            background: #FFF;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .rawatib-card:hover {
+            border-color: var(--md-sys-color-outline);
+            background: var(--md-sys-color-surface-container);
+        }
+        .rawatib-card input[type="checkbox"] {
+            position: absolute;
+            opacity: 0;
+            width: 1px;
+            height: 1px;
+            pointer-events: none;
+        }
+        .rawatib-card:has(input:focus-visible) {
+            outline: 2px solid var(--md-sys-color-primary);
+            outline-offset: 2px;
+        }
+        .rawatib-card-icon {
+            flex: 0 0 auto;
+            width: 34px;
+            height: 34px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            background: var(--md-sys-color-surface-container);
+            font-size: 1rem;
+            line-height: 1;
+            transition: background 0.15s ease;
+        }
+        .rawatib-card-body {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.25;
+            min-width: 0;
+        }
+        .rawatib-card-title {
+            font-size: 0.82rem;
+            font-weight: 700;
+            color: var(--md-sys-color-on-surface);
+        }
+        .rawatib-card-sub {
+            font-size: 0.7rem;
+            color: var(--md-sys-color-outline);
+        }
+        .rawatib-card-check {
+            margin-left: auto;
+            flex: 0 0 auto;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            border: 2px solid var(--md-sys-color-outline-variant);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: transparent;
+            font-size: 0.62rem;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+        .rawatib-card.is-active {
+            border-color: var(--md-sys-color-primary);
+            background: var(--md-sys-color-primary-container);
+        }
+        .rawatib-card.is-active .rawatib-card-icon {
+            background: var(--md-sys-color-primary);
+        }
+        .rawatib-card.is-active .rawatib-card-title,
+        .rawatib-card.is-active .rawatib-card-sub {
+            color: var(--md-sys-color-on-primary-container);
+        }
+        .rawatib-card.is-active .rawatib-card-sub {
+            opacity: 0.75;
+        }
+        .rawatib-card.is-active .rawatib-card-check {
+            background: var(--md-sys-color-primary);
+            border-color: var(--md-sys-color-primary);
+            color: #FFF;
+        }
+
         /* Form elements & buttons di Popover */
         .popover-input {
             width: 100%;

@@ -1,5 +1,5 @@
 // FILE: sw.js
-const CACHE_NAME = 'tracker-amalan-v4';
+const CACHE_NAME = 'tracker-amalan-v5';
 const ASSETS_TO_CACHE = [
   'https://fonts.googleapis.com/css2?family=Roboto+Flex:opsz,wght@8..144,300;8..144,400;8..144,500;8..144,600;8..144,700&display=swap',
   'https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200',

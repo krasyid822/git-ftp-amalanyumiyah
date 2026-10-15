@@ -174,37 +174,48 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         }
         
     } else if (key === 'rawatib') {
+        // Kartu per waktu rawatib. Setiap kartu membungkus checkbox tersembunyi
+        // supaya perilaku simpan/commit tetap sama seperti sebelumnya.
         const rawatibSubKeys = {
-            'rawatib_subuh_q': '2 Rakaat sebelum Subuh ←🌅',
-            'rawatib_dzuhur_q': '2 atau 4 Rakaat sebelum Dzuhur ←☀️',
-            'rawatib_dzuhur_b': '2 Rakaat setelah Dzuhur →☀️',
-            'rawatib_maghrib_b': '2 Rakaat setelah Maghrib →🌇',
-            'rawatib_isya_b': '2 Rakaat setelah Isya →☪️'
+            'rawatib_subuh_q':   { rakaat: '2 Rakaat',   waktu: 'sebelum Subuh',   icon: '🌅' },
+            'rawatib_dzuhur_q':  { rakaat: '2 atau 4 Rakaat', waktu: 'sebelum Dzuhur', icon: '☀️' },
+            'rawatib_dzuhur_b':  { rakaat: '2 Rakaat',   waktu: 'setelah Dzuhur',  icon: '🕛' },
+            'rawatib_maghrib_b': { rakaat: '2 Rakaat',   waktu: 'setelah Maghrib', icon: '🌇' },
+            'rawatib_isya_b':    { rakaat: '2 Rakaat',   waktu: 'setelah Isya',    icon: '🌙' }
         };
-        
-        bodyHtml += `<div style="display: flex; flex-direction: column; gap: 8px;">`;
+
+        const form = document.getElementById('form-amalan');
+        bodyHtml += `<div class="rawatib-cards">`;
         for (const rkey in rawatibSubKeys) {
-            const form = document.getElementById('form-amalan');
-            const isChecked = (form.elements[rkey] && form.elements[rkey].checked) ? 'checked' : '';
-            bodyHtml += `<div class="checkbox-group" style="font-size: 0.8rem;">
-                <input type="checkbox" id="popover-${rkey}" data-rkey="${rkey}" ${isChecked}>
-                <label for="popover-${rkey}">${rawatibSubKeys[rkey]}</label>
-            </div>`;
+            const info = rawatibSubKeys[rkey];
+            const isOn = !!(form.elements[rkey] && form.elements[rkey].checked);
+            bodyHtml += `<label class="rawatib-card${isOn ? ' is-active' : ''}" data-rkey="${rkey}">
+                <input type="checkbox" id="popover-${rkey}" data-rkey="${rkey}" ${isOn ? 'checked' : ''}>
+                <span class="rawatib-card-icon">${info.icon}</span>
+                <span class="rawatib-card-body">
+                    <span class="rawatib-card-title">${info.rakaat}</span>
+                    <span class="rawatib-card-sub">${info.waktu}</span>
+                </span>
+                <span class="rawatib-card-check"><i class="fa-solid fa-check"></i></span>
+            </label>`;
         }
         bodyHtml += `</div>`;
-        
+
         popoverBodyContent.innerHTML = bodyHtml;
-        
+
         function triggerRawatibSave() {
             const details = {};
-            popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+            popoverBodyContent.querySelectorAll('.rawatib-card input[type="checkbox"]').forEach(cb => {
                 details[cb.dataset.rkey] = cb.checked ? '✓' : '';
             });
             saveCellData(dateStr, key, JSON.stringify(details), cell, false);
         }
-        
-        popoverBodyContent.querySelectorAll('input[type="checkbox"]').forEach(cb => {
-            cb.addEventListener('change', triggerRawatibSave);
+
+        popoverBodyContent.querySelectorAll('.rawatib-card input[type="checkbox"]').forEach(cb => {
+            cb.addEventListener('change', () => {
+                cb.closest('.rawatib-card').classList.toggle('is-active', cb.checked);
+                triggerRawatibSave();
+            });
         });
         
     } else if (key === 'istighfar') {
@@ -383,6 +394,8 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
     if (popoverViewportTop + popoverHeight > window.innerHeight - 10) {
         popoverViewportTop = cellRect.top - popoverHeight - 8;
     }
+    // Jaga agar popover selalu terlihat, termasuk saat isinya tinggi (kartu rawatib).
+    popoverViewportTop = Math.max(10, Math.min(popoverViewportTop, window.innerHeight - popoverHeight - 10));
     
     const popoverLeft = popoverViewportLeft - parentRect.left;
     const popoverTop = popoverViewportTop - parentRect.top;
