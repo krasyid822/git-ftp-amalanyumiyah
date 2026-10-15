@@ -86,7 +86,7 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         bodyHtml += `<div class="popover-sholat-grid" style="grid-template-columns: 1fr; gap: 8px;">`;
         options.forEach(opt => {
             const isActive = (opt.val === currentValue) ? 'active' : '';
-            bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
+            bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${opt.class} ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
         });
         bodyHtml += `</div>`;
         
@@ -104,12 +104,12 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         
     } else if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
         const sholatStates = [
-            { val: '', label: '--', class: 'status-empty', icon: 'fa-circle-question' },
-            { val: 'M', label: 'Masjid (Jamaah)', class: 'status-good', icon: 'fa-mosque' },
-            { val: 'R-J', label: 'Rumah (Jamaah)', class: 'status-ok-2', icon: 'fa-house-user' },
-            { val: 'M-S', label: 'Masjid (Sendiri)', class: 'status-ok-1', icon: 'fa-person-praying' },
-            { val: 'R', label: 'Rumah (Sendiri)', class: 'status-ok-1', icon: 'fa-house' },
-            { val: 'Q', label: 'Qadha', class: 'status-qadha', icon: 'fa-clock-rotate-left' }
+            { val: '', label: '--', class: 'status-empty', icon: 'fa-circle-question', tier: 'Belum diisi' },
+            { val: 'M', label: 'Masjid (Jamaah)', class: 'status-good', icon: 'fa-mosque', tier: 'Masjid / Terbaik / Target Tercapai' },
+            { val: 'R-J', label: 'Rumah (Jamaah)', class: 'status-ok-2', icon: 'fa-house-user', tier: 'Terlaksana Baik' },
+            { val: 'M-S', label: 'Masjid (Sendiri)', class: 'status-ok-1', icon: 'fa-person-praying', tier: 'Sendiri / Belum Capai Target' },
+            { val: 'R', label: 'Rumah (Sendiri)', class: 'status-ok-1', icon: 'fa-house', tier: 'Rumah / Sendiri / Belum Capai Target' },
+            { val: 'Q', label: 'Qadha', class: 'status-qadha', icon: 'fa-clock-rotate-left', tier: 'Qadha (Khusus Sholat)' }
         ];
         
         let initialQDate = '';
@@ -129,7 +129,7 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         bodyHtml += `<div class="popover-sholat-grid">`;
         sholatStates.forEach(s => {
             const isActive = (s.val === 'Q' && isQadha) || (!isQadha && s.val === currentValue) ? 'active' : '';
-            bodyHtml += `<button type="button" class="popover-option-btn popover-sholat-btn ${isActive}" data-value="${s.val}"><i class="fa-solid ${s.icon}"></i> ${s.label}</button>`;
+            bodyHtml += `<button type="button" class="popover-option-btn popover-sholat-btn ${s.class} ${isActive}" data-value="${s.val}" title="${s.tier}"><i class="fa-solid ${s.icon}"></i> ${s.label}</button>`;
         });
         bodyHtml += `</div>`;
         
@@ -225,7 +225,10 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         bodyHtml += `<div class="popover-sholat-grid">`;
         istighfarSteps.forEach(val => {
             const isActive = (currentIstighfarNum === val) ? 'active' : '';
-            bodyHtml += `<button type="button" class="popover-option-btn popover-istighfar-btn ${isActive}" data-value="${val}">${val}</button>`;
+            // Selaras legenda: 200 = target tercapai (hijau), >0 belum capai (kuning), 0 = kosong.
+            const tierClass = val === 0 ? 'status-empty' : (val >= 200 ? 'status-good' : 'status-ok-1');
+            const tierTitle = val === 0 ? 'Belum diisi' : (val >= 200 ? 'Target tercapai' : 'Belum capai target');
+            bodyHtml += `<button type="button" class="popover-option-btn popover-istighfar-btn ${tierClass} ${isActive}" data-value="${val}" title="${tierTitle}">${val}</button>`;
         });
         bodyHtml += `</div>`;
         
@@ -334,7 +337,7 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
         bodyHtml += `<div class="popover-sholat-grid" style="grid-template-columns: 1fr; gap: 8px; margin-bottom: 8px;">`;
         options.forEach(opt => {
             const isActive = (opt.val === '✓' && isChecked) || (opt.val === '' && !isChecked) ? 'active' : '';
-            bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
+            bodyHtml += `<button type="button" class="popover-option-btn popover-toggle-btn ${opt.class} ${isActive}" data-value="${opt.val}" style="text-align: left; padding: 10px 14px; display: flex; align-items: center; gap: 8px;"><i class="fa-solid ${opt.icon}"></i> ${opt.label}</button>`;
         });
         bodyHtml += `</div>`;
         

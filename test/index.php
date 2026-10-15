@@ -2891,6 +2891,68 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             border-color: var(--md-sys-color-primary);
         }
 
+        /* Warna tombol opsi selaras legenda tabel (status-*):
+           hijau = Terbaik/Target tercapai, biru = Terlaksana baik,
+           kuning = Belum capai target, merah = Qadha. */
+        .popover-option-btn.status-empty {
+            background: var(--md-sys-color-surface-container);
+            color: var(--md-sys-color-on-surface-variant);
+            border-color: var(--md-sys-color-outline-variant);
+        }
+        .popover-option-btn.status-good {
+            background: var(--color-good);
+            color: var(--color-good-text);
+            border-color: var(--color-good-text);
+        }
+        .popover-option-btn.status-ok-2 {
+            background: var(--color-ok-2);
+            color: var(--color-ok-2-text);
+            border-color: var(--color-ok-2-text);
+        }
+        .popover-option-btn.status-ok-1 {
+            background: var(--color-ok-1);
+            color: var(--color-ok-1-text);
+            border-color: var(--color-ok-1-text);
+        }
+        .popover-option-btn.status-qadha {
+            background: var(--color-qadha);
+            color: var(--color-qadha-text);
+            border-color: var(--color-qadha-text);
+        }
+        .popover-option-btn.status-good:hover,
+        .popover-option-btn.status-ok-2:hover,
+        .popover-option-btn.status-ok-1:hover,
+        .popover-option-btn.status-qadha:hover,
+        .popover-option-btn.status-empty:hover {
+            filter: brightness(0.95);
+        }
+        /* Aktif = warna pekat + cincin putih, supaya jelas mana yang terpilih */
+        .popover-option-btn.active {
+            color: #FFF;
+            font-weight: 800;
+            box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.7), 0 2px 6px rgba(0, 0, 0, 0.18);
+        }
+        .popover-option-btn.status-good.active {
+            background: var(--color-success);
+            border-color: var(--color-success);
+        }
+        .popover-option-btn.status-ok-2.active {
+            background: var(--color-info);
+            border-color: var(--color-info);
+        }
+        .popover-option-btn.status-ok-1.active {
+            background: var(--color-warning);
+            border-color: var(--color-warning);
+        }
+        .popover-option-btn.status-qadha.active {
+            background: var(--md-sys-color-error);
+            border-color: var(--md-sys-color-error);
+        }
+        .popover-option-btn.status-empty.active {
+            background: var(--md-sys-color-outline);
+            border-color: var(--md-sys-color-outline);
+        }
+
         /* Rawatib: input berbentuk kartu (bukan checkbox polos) */
         .rawatib-cards {
             display: flex;
