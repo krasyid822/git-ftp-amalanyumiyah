@@ -34,51 +34,75 @@ self.addEventListener('activate', (e) => {
 
 // Fetch Event
 self.addEventListener('fetch', (e) => {
-  // Only handle GET requests. POST requests (e.g. AJAX saves) should bypass the cache.
-  if (e.request.method !== 'GET') {
+  const req = e.request;
+
+  // Only handle GET requests. POST requests (e.g. AJAX saves) bypass the cache.
+  if (req.method !== 'GET') {
+    return;
+  }
+
+  // Only http/https can be stored by the Cache API. Skip other schemes such as
+  // chrome-extension:, data:, blob:, etc. Otherwise cache.put() throws:
+  // "Request scheme 'chrome-extension' is unsupported".
+  let url;
+  try {
+    url = new URL(req.url);
+  } catch {
+    return;
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
     return;
   }
 
   e.respondWith(
-    fetch(e.request)
+    fetch(req)
       .then((response) => {
-        // If valid response, clone and cache it
-        if (response.status === 200) {
+        // Cache only valid, storable responses (skip opaque/partial ones).
+        if (response && response.status === 200 && response.type !== 'opaque') {
           const resClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(e.request, resClone);
-          });
+          caches.open(CACHE_NAME)
+            .then((cache) => cache.put(req, resClone))
+            .catch(() => { /* ignore: some responses cannot be cached */ });
         }
         return response;
       })
-      .catch(() => {
-        // If network fails, try cache
-        return caches.match(e.request).then((cachedResponse) => {
+      .catch((networkError) => {
+        // Network failed: try the cache.
+        return caches.match(req).then((cachedResponse) => {
           if (cachedResponse) {
             return cachedResponse;
           }
-          // Normalize paths for matching index pages
-          if (e.request.headers.get('accept').includes('text/html')) {
-            const url = new URL(e.request.url);
-            const path = url.pathname;
-            
-            // Try matching path directly, or appending index.php if it's a directory path
-            const possiblePaths = [
-              path,
-              path.endsWith('/') ? path : path + '/',
-              path.endsWith('/') ? path + 'index.php' : path + '/index.php',
-              path.endsWith('index.php') ? path.substring(0, path.lastIndexOf('index.php')) : path
-            ];
-            
-            return Promise.any(
-              possiblePaths.map(p => caches.match(p).then(res => {
-                if (res) return res;
-                throw new Error('Not found');
-              }))
-            ).catch(() => {
-              return caches.match(e.request) || caches.match('./index.php') || caches.match('./');
-            });
+
+          const accept = req.headers.get('accept') || '';
+          if (!accept.includes('text/html')) {
+            throw networkError;
           }
+
+          // Normalize paths for matching index pages.
+          const path = url.pathname;
+          const possiblePaths = [
+            path,
+            path.endsWith('/') ? path : path + '/',
+            path.endsWith('/') ? path + 'index.php' : path + '/index.php',
+            path.endsWith('index.php') ? path.substring(0, path.lastIndexOf('index.php')) : path
+          ];
+
+          return Promise.any(
+            possiblePaths.map((p) => caches.match(p).then((res) => {
+              if (res) return res;
+              throw new Error('Not found');
+            }))
+          ).catch(() => {
+            return Promise.all([
+              caches.match(req),
+              caches.match('./index.php'),
+              caches.match('./')
+            ]).then((candidates) => {
+              const found = candidates.find(Boolean);
+              if (found) return found;
+              throw networkError;
+            });
+          });
         });
       })
   );

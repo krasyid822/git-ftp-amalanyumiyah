@@ -4,3 +4,8 @@
 .netrc
 *.log
 test/_manifest/
+
+# Kredensial admin: JANGAN ke GitHub. Ikut ke server FTP lewat .git-ftp-include.
+test/admin.json
+# Penanda hash test/admin.json yang terakhir sudah di-upload ke FTP.
+.git-ftp-admin.sha

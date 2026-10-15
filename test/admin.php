@@ -26,6 +26,7 @@ date_default_timezone_set('Asia/Jakarta');
 
 const ADMIN_ROOT   = __DIR__ . '/..';
 const TRASH_DIR    = '.DEPRECATED';
+const OUT_DIR      = '.OUT'; // di dalam .DEPRECATED: mentee yang tidak lagi mentoring
 const MENTOR_FLAG  = '.THIS_IS_MENTOR';
 const RESERVED_DIRS = ['test', TRASH_DIR, '.git', 'assets'];
 
@@ -37,6 +38,11 @@ const ICON_BASE       = 'https://raw.githubusercontent.com/krasyid822/for-manife
 const MANIFEST_LOCAL_DIR = __DIR__ . '/_manifest';
 const GITHUB_TOKEN_FILE  = MANIFEST_LOCAL_DIR . '/.token';
 const GITHUB_USER_AGENT = 'amalanyaumiyah-admin';
+
+// --- Revisi aset tampilan (cache-busting) ---
+// Versi aset tema (ikon & tampilan). Nilai ini dipakai pada tautan ikon agar
+// perangkat memuat ulang aset saat tampilan berubah; boleh diperbarui kapan saja.
+const ADM_ASSET_REV = '8c7d4a5bd6a791247fc16aad88d44374a8e0d87b';
 
 function adm_h(mixed $v): string {
     return htmlspecialchars((string) $v, ENT_QUOTES, 'UTF-8');
@@ -297,6 +303,26 @@ function adm_find_trashed_mentee(string $root, string $name, ?string $exceptGrou
         if (is_dir($dir)) return ['group' => $g, 'path' => $dir];
     }
     return null;
+}
+
+/**
+ * Pindahkan folder $src ke $dest. Bila $dest sudah ada, isi $src digabungkan ke
+ * dalam $dest (tanpa menimpa) lalu $src dihapus. Dipakai saat menghapus grup utuh
+ * agar strukturnya tetap seragam: <root>/.DEPRECATED/<grup>/<mentee>/.
+ */
+function adm_move_merge(string $src, string $dest): bool {
+    if (!is_dir($dest)) return @rename($src, $dest);
+
+    $ok = true;
+    foreach (scandir($src) ?: [] as $e) {
+        if ($e === '.' || $e === '..') continue;
+        $from = $src . '/' . $e;
+        $to   = $dest . '/' . $e;
+        if (file_exists($to)) $to .= '-' . date('Ymd-His');
+        if (!@rename($from, $to)) $ok = false;
+    }
+    @rmdir($src); // hanya terhapus bila benar-benar sudah kosong
+    return $ok && !is_dir($src);
 }
 
 function adm_json_out(array $payload): never {
@@ -637,9 +663,432 @@ function adm_normalize_targets(array $raw, string $group): array {
     return $out;
 }
 
-// ======================= AKSI (AJAX) =======================
+// ======================= AUTENTIKASI ADMIN =======================
+// Kredensial dibuat oleh ./create-admin.sh dan disimpan terenkripsi (AES-256-GCM)
+// di test/admin.json. File itu TIDAK ikut ke GitHub, tetapi ikut ke server FTP
+// (lihat .git-ftp-include).
+//
+// Agar menyalin test/admin.json saja tidak cukup, kunci untuk membukanya
+// tidak ditulis apa adanya di file itu: kuncinya dibungkus dengan bahan
+// internal (lihat ADM_ASSET_REV) yang dipakai halaman ini.
+
+const ADMIN_CRED_FILE = __DIR__ . '/admin.json';
+const ADMIN_SESSION_USER = 'adm_user';
+/** Penanda sidik jari admin.json saat sesi dibuat (lihat adm_logged_in()). */
+const ADMIN_SESSION_CRED = 'adm_cred';
+
+/**
+ * Bahan kunci internal (32 byte) untuk membuka kunci kredensial di
+ * test/admin.json. Diturunkan dari ADM_ASSET_REV.
+ */
+function adm_cred_secret(): string {
+    return hash('sha256', ADM_ASSET_REV . '|v1', true);
+}
+
+if (session_status() !== PHP_SESSION_ACTIVE) {
+    session_set_cookie_params([
+        'httponly' => true,
+        'samesite' => 'Lax',
+        'path'     => dirname($_SERVER['SCRIPT_NAME'] ?? '/test/admin.php'),
+    ]);
+    session_start();
+}
+
+/** Baca & dekripsi kredensial dari test/admin.json. Null bila tidak ada/rusak. */
+function adm_cred_read(): ?array {
+    if (!is_file(ADMIN_CRED_FILE)) return null;
+    $j = json_decode((string) @file_get_contents(ADMIN_CRED_FILE), true);
+    if (!is_array($j) || ($j['alg'] ?? '') !== 'aes-256-gcm') return null;
+
+    $iv  = base64_decode((string) ($j['iv']      ?? ''), true);
+    $tag = base64_decode((string) ($j['tag']     ?? ''), true);
+    $ct  = base64_decode((string) ($j['data']    ?? ''), true);
+    $kw  = base64_decode((string) ($j['key']     ?? ''), true);
+    $kiv = base64_decode((string) ($j['key_iv']  ?? ''), true);
+    $ktg = base64_decode((string) ($j['key_tag'] ?? ''), true);
+    if ($iv === false || $tag === false || $ct === false || $kw === false || $kw === ''
+        || $kiv === false || $ktg === false) {
+        return null;
+    }
+
+    // Kunci kredensial tersimpan terbungkus; buka dengan bahan internal.
+    $key = openssl_decrypt($kw, 'aes-256-gcm', adm_cred_secret(), OPENSSL_RAW_DATA, $kiv, $ktg);
+    if ($key === false) return null;
+
+    $plain = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    if ($plain === false) return null;
+
+    $data = json_decode($plain, true);
+    return is_array($data) ? $data : null;
+}
+
+/** Cocokkan username & password dengan kredensial tersimpan. */
+function adm_cred_verify(string $user, string $pass): bool {
+    $data = adm_cred_read();
+    if ($data === null) return false;
+    return hash_equals((string) ($data['username'] ?? ''), $user)
+        && password_verify($pass, (string) ($data['password_hash'] ?? ''));
+}
+
+/**
+ * Sidik jari file kredensial. Berubah (atau null) bila admin.json dihapus,
+ * rusak, atau dibuat ulang — dipakai untuk menggugurkan sesi lama.
+ */
+function adm_cred_fingerprint(): ?string {
+    if (!is_file(ADMIN_CRED_FILE)) return null;
+    $h = @hash_file('sha256', ADMIN_CRED_FILE);
+    return $h === false ? null : $h;
+}
+
+/**
+ * Sudah masuk? Sesi hanya berlaku selama file kredensial masih ada dan belum
+ * berubah. Jadi menghapus/mengganti test/admin.json otomatis mengeluarkan admin
+ * yang masih memegang sesi lama.
+ */
+function adm_logged_in(): bool {
+    if (empty($_SESSION[ADMIN_SESSION_USER])) return false;
+    $now = adm_cred_fingerprint();
+    $was = (string) ($_SESSION[ADMIN_SESSION_CRED] ?? '');
+    if ($now === null || $was === '' || !hash_equals($was, $now)) {
+        $_SESSION = [];
+        return false;
+    }
+    return true;
+}
+
+/** URL halaman ini tanpa query string (untuk redirect). */
+function adm_self_url(): string {
+    $uri = (string) ($_SERVER['REQUEST_URI'] ?? 'admin.php');
+    $q   = strpos($uri, '?');
+    return $q === false ? $uri : substr($uri, 0, $q);
+}
+
+/** Halaman login admin (tampilan mandiri, tema gelap). Selalu keluar. */
+function adm_render_login(string $error = '', bool $noCred = false): never {
+    ?><!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Masuk Admin</title>
+<link rel="icon" href="<?= adm_h(ICON_BASE) ?>/icon-192.png?rev=<?= adm_h(substr(ADM_ASSET_REV, 0, 12)) ?>">
+<style>
+:root{--bg:#061612;--surface:#0b1f1b;--line:rgba(158,243,208,.14);--line2:rgba(158,243,208,.22);
+      --text:#eefbf5;--muted:#97b2a8;--accent:#7df0c5;--accent2:#ffd27d;--danger:#ff8b8b}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+     font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);padding:24px}
+.card{width:100%;max-width:380px;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:26px}
+h1{font-size:1.25rem;margin:0 0 4px}
+.sub{color:var(--muted);font-size:.85rem;margin:0 0 18px}
+label{display:block;font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin:14px 0 6px}
+input{width:100%;background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:9px;padding:11px 12px;font:inherit}
+input:focus{outline:2px solid var(--accent);outline-offset:1px}
+button{width:100%;margin-top:20px;font:inherit;font-weight:700;border:0;border-radius:9px;padding:11px 14px;
+       cursor:pointer;background:var(--accent);color:#041611}
+button:hover{filter:brightness(1.08)}
+.err{background:rgba(255,139,139,.1);border:1px solid rgba(255,139,139,.3);color:var(--danger);
+     border-radius:9px;padding:9px 12px;font-size:.85rem;margin-bottom:6px}
+.warn{background:rgba(255,210,125,.1);border:1px solid rgba(255,210,125,.3);color:var(--accent2);
+      border-radius:9px;padding:9px 12px;font-size:.82rem;line-height:1.55;margin-bottom:6px}
+code{background:#08130f;padding:1px 5px;border-radius:4px;font-size:.85em}
+</style>
+</head>
+<body>
+<form class="card" method="post" action="">
+    <h1>Masuk Admin</h1>
+    <p class="sub">Halaman pengelolaan grup &amp; mentee.</p>
+    <?php if ($noCred): ?>
+        <div class="warn">Kredensial admin belum ada atau rusak. Jalankan <code>./create-admin.sh</code>
+            di komputer, lalu kirim ke server (mis. <code>./push.sh</code>).</div>
+    <?php endif; ?>
+    <?php if ($error !== ''): ?>
+        <div class="err"><?= adm_h($error) ?></div>
+    <?php endif; ?>
+    <input type="hidden" name="action" value="login">
+    <label for="username">Username</label>
+    <input type="text" id="username" name="username" autocomplete="username" autofocus required>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" required>
+    <button type="submit">Masuk</button>
+</form>
+</body>
+</html><?php
+    exit;
+}
+
 $action = $_POST['action'] ?? '';
 
+// --- Keluar ---
+if ($action === 'logout') {
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], (bool) $p['secure'], (bool) $p['httponly']);
+    }
+    session_destroy();
+    header('Location: ' . adm_self_url());
+    exit;
+}
+
+// --- Masuk ---
+if (!adm_logged_in() && $action === 'login') {
+    $u = trim((string) ($_POST['username'] ?? ''));
+    $p = (string) ($_POST['password'] ?? '');
+    if (adm_cred_verify($u, $p)) {
+        session_regenerate_id(true);
+        $_SESSION[ADMIN_SESSION_USER] = $u;
+        $_SESSION[ADMIN_SESSION_CRED] = (string) adm_cred_fingerprint();
+        header('Location: ' . adm_self_url());
+        exit;
+    }
+    adm_render_login('Username atau password salah.', adm_cred_read() === null);
+}
+
+// --- Belum masuk: tolak aksi (AJAX) & tampilkan halaman login ---
+if (!adm_logged_in()) {
+    if ($action !== '') {
+        adm_json_out(['ok' => false, 'messages' => [adm_msg('Sesi berakhir. Muat ulang lalu masuk lagi.', 'err')]]);
+    }
+    adm_render_login('', adm_cred_read() === null);
+}
+
+// ======================= TOOL MANDIRI: PEMBUAT NAMA PANGGILAN =======================
+// Blok ini berdiri sendiri (tidak tersambung ke fitur lain): hanya mengusulkan
+// beberapa nama panggilan dari sebuah nama lengkap, lalu menandai mana yang belum
+// dipakai. Tidak membuat/mengubah/menghapus file apa pun.
+//
+// Aturan "tidak duplikat": dicek terhadap seluruh nama yang sudah ada — semua nama
+// mentee di semua grup (aktif + tempat sampah) dan nama grup. Tanpa angka.
+//
+// Dipanggil dari: blok AKSI ($nn = nickname_handle(...)) dan bagian HTML
+// (nickname_render($root)).
+
+/** Daftar nama yang sudah dipakai: nama grup + nama mentee (aktif & tempat sampah). */
+function nickname_existing(string $root): array
+{
+    $taken = [];
+    $add = static function (?string $name) use (&$taken): void {
+        $n = strtolower(trim((string) $name));
+        if ($n !== '') $taken[$n] = true;
+    };
+
+    // Grup aktif + menteenya.
+    foreach (adm_groups($root) as $g) {
+        $add($g);
+        foreach (array_keys(adm_mentees($root . '/' . $g)) as $m) $add($m);
+    }
+
+    // Tempat sampah: <root>/.DEPRECATED/<grup>/<mentee>/ — mencakup mentee yang
+    // dihapus maupun grup utuh yang dihapus (nama grup + menteenya).
+    $trash = $root . '/' . TRASH_DIR;
+    foreach (adm_subfolders($trash) as $g) {
+        $add($g);
+        foreach (array_keys(adm_mentees($trash . '/' . $g)) as $m) $add($m);
+    }
+
+    // Mentee yang tidak lagi mentoring: <root>/.DEPRECATED/.OUT/<mentee>/.
+    foreach (array_keys(adm_mentees($trash . '/' . OUT_DIR)) as $m) $add($m);
+
+    $names = array_keys($taken);
+    sort($names);
+    return $names;
+}
+
+/** Label urutan: pertama, kedua, ketiga, ... */
+function nickname_ordinal(int $i): string
+{
+    $words = ['pertama', 'kedua', 'ketiga', 'keempat', 'kelima',
+              'keenam', 'ketujuh', 'kedelapan', 'kesembilan', 'kesepuluh'];
+    return $words[$i] ?? ('ke-' . ($i + 1));
+}
+
+/**
+ * Usulan nama panggilan dari nama lengkap (tanpa angka), terurut dari yang
+ * paling wajar. Tiap usulan: ['text' => slug, 'label' => asal-usul].
+ */
+function nickname_candidates(string $full): array
+{
+    $clean = preg_replace('/[^a-z0-9]+/', ' ', strtolower($full)) ?? '';
+    $words = array_values(array_filter(explode(' ', trim($clean)), static fn($w) => $w !== ''));
+    $n = count($words);
+    if ($n === 0) return [];
+
+    $out = [];
+    $seen = [];
+    $push = static function (string $text, string $label) use (&$out, &$seen): void {
+        $text = adm_slug($text);
+        if ($text === '' || !adm_valid_name($text) || strlen($text) > 24) return;
+        if (isset($seen[$text])) return;
+        $seen[$text] = true;
+        $out[] = ['text' => $text, 'label' => $label];
+    };
+    $initials = static function (array $ws): string {
+        $s = '';
+        foreach ($ws as $w) $s .= $w[0];
+        return $s;
+    };
+
+    // 1) Tiap kata (paling wajar sebagai nama panggilan).
+    foreach ($words as $i => $w) {
+        $label = 'kata ' . nickname_ordinal($i);
+        if ($n > 1 && $i === $n - 1) $label = 'kata terakhir';
+        $push($w, $label);
+    }
+
+    // 2) Bentuk inisial / gabungan (kalau kata tunggal sudah dipakai).
+    if ($n >= 2) {
+        $push($initials($words), 'inisial semua kata');
+        $push($initials(array_slice($words, 0, 2)), 'inisial 2 kata pertama');
+        $push($words[0] . $initials(array_slice($words, 1)), 'kata pertama + inisial sisanya');
+        $push($initials(array_slice($words, 0, $n - 1)) . $words[$n - 1], 'inisial awal + kata terakhir');
+        $push($words[0] . $words[$n - 1], 'kata pertama + kata terakhir');
+    }
+    if (strlen($words[0]) >= 5) $push(substr($words[0], 0, 4), 'singkatan kata pertama');
+    if ($n >= 2 && strlen($words[$n - 1]) >= 5) $push(substr($words[$n - 1], 0, 4), 'singkatan kata terakhir');
+
+    return $out;
+}
+
+/**
+ * Tangani aksi AJAX 'gen_nickname'. Kembalikan array balasan (untuk digabung ke
+ * $reply), atau null bila aksi bukan milik tool ini.
+ */
+function nickname_handle(string $action, string $root): ?array
+{
+    if ($action !== 'gen_nickname') return null;
+
+    $full = trim((string) ($_POST['full_name'] ?? ''));
+    if ($full === '') {
+        return ['ok' => false, 'messages' => [adm_msg('Nama lengkap belum diisi.', 'err')]];
+    }
+
+    $takenList = nickname_existing($root);
+    $taken = array_fill_keys($takenList, true);
+
+    $cands = nickname_candidates($full);
+    if (!$cands) {
+        return ['ok' => false, 'messages' => [adm_msg('Nama tidak bisa diolah menjadi nama panggilan.', 'err')]];
+    }
+
+    $available = [];
+    foreach ($cands as &$c) {
+        $c['available'] = !isset($taken[$c['text']]);
+        if ($c['available']) $available[] = $c['text'];
+    }
+    unset($c);
+
+    $ok = $available !== [];
+    return [
+        'ok'          => $ok,
+        'messages'    => [$ok
+            ? adm_msg("Usulan unik: {$available[0]}.")
+            : adm_msg('Semua usulan sudah dipakai. Tool ini tidak menambah angka — ubah/tambah kata pada nama lengkap.', 'err')],
+        'full_name'   => $full,
+        'candidates'  => $cands,
+        'taken_count' => count($takenList),
+    ];
+}
+
+/** Gambar UI tool (dipanggil dari bagian HTML). */
+function nickname_render(string $root): void
+{
+    $takenCount = count(nickname_existing($root));
+    ?>
+<section class="panel" id="nn-panel">
+    <h2>Pembuat Nama Panggilan <span class="tag muted">tool mandiri</span></h2>
+    <p class="hint">
+        Hasilkan usulan <strong>nama panggilan</strong> dari sebuah <strong>nama lengkap</strong>.
+        Tiap usulan diperiksa terhadap <span id="nn-taken"><?= $takenCount ?></span> nama yang sudah ada
+        (semua nama mentee di semua grup &amp; tempat sampah, plus nama grup) supaya tidak duplikat.
+        Angka itu dihitung ulang tiap kali tool dipakai.
+        Tool ini berdiri sendiri &mdash; tidak menyimpan atau mengubah apa pun.
+    </p>
+    <div class="row" style="margin:12px 0">
+        <input type="text" id="nn-full" placeholder="Nama lengkap, mis. Ahmad Rasyid Kurniawan" autocomplete="off">
+        <button id="nn-go" type="button">Buat nama panggilan</button>
+    </div>
+    <div id="nn-out"></div>
+</section>
+<style>
+#nn-panel td:first-child{font-weight:700;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+#nn-panel tr.nn-rec{background:rgba(125,240,197,.06)}
+#nn-panel .nn-copy{padding:4px 9px;font-size:.72rem}
+</style>
+<script>
+(function(){
+    const inp = document.getElementById('nn-full');
+    const go  = document.getElementById('nn-go');
+    const out = document.getElementById('nn-out');
+    if (!inp || !go || !out) return;
+
+    function esc(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    function run(){
+        const v = inp.value.trim();
+        if (!v){ out.innerHTML = '<p class="hint">Isi nama lengkap dulu.</p>'; return; }
+        out.innerHTML = '<p class="hint">Menghitung...</p>';
+        const body = new URLSearchParams();
+        body.set('action','gen_nickname');
+        body.set('full_name', v);
+        fetch('', {method:'POST', body, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+            .then(r => r.json())
+            .then(draw)
+            .catch(() => { out.innerHTML = '<p class="hint">Gagal menghubungi server.</p>'; });
+    }
+
+    function draw(d){
+        // Segarkan jumlah nama yang diperiksa dari server (data terbaru), bukan
+        // angka yang tertanam saat halaman dimuat.
+        if (typeof d.taken_count === 'number'){
+            const t = document.getElementById('nn-taken');
+            if (t) t.textContent = d.taken_count;
+        }
+        const cs = Array.isArray(d.candidates) ? d.candidates : [];
+        if (!cs.length){
+            const msg = (d.messages && d.messages[0] && d.messages[0].text) || 'Tidak ada usulan.';
+            out.innerHTML = '<p class="hint">' + esc(msg) + '</p>';
+            return;
+        }
+        let first = true;
+        let rows = '';
+        cs.forEach(c => {
+            const rec = c.available && first;
+            if (c.available) first = false;
+            rows += '<tr class="' + (rec ? 'nn-rec' : '') + '">'
+                 +  '<td>' + esc(c.text) + '</td>'
+                 +  '<td>' + esc(c.label) + '</td>'
+                 +  '<td>' + (c.available ? '<span class="tag mentee">tersedia</span>' : '<span class="tag trash">dipakai</span>')
+                 +      (rec ? ' <span class="tag mentor">rekomendasi</span>' : '') + '</td>'
+                 +  '<td style="width:1%"><button class="ghost nn-copy" type="button" data-text="' + esc(c.text) + '">Salin</button></td>'
+                 +  '</tr>';
+        });
+        const anyAvail = cs.some(c => c.available);
+        out.innerHTML = '<table><thead><tr><th>Nama panggilan</th><th>Asal</th><th>Status</th><th></th></tr></thead><tbody>'
+                      + rows + '</tbody></table>'
+                      + (anyAvail
+                          ? '<p class="hint">Pilih salah satu yang berstatus <em>tersedia</em>. Baris <em>rekomendasi</em> adalah usulan pertama yang belum dipakai.</p>'
+                          : '<p class="hint" style="color:var(--danger)">Semua usulan sudah dipakai. Tool ini tidak menambah angka &mdash; ubah atau tambah kata pada nama lengkap.</p>');
+    }
+
+    go.addEventListener('click', run);
+    inp.addEventListener('keydown', e => { if (e.key === 'Enter'){ e.preventDefault(); run(); } });
+    out.addEventListener('click', e => {
+        const b = e.target.closest('.nn-copy');
+        if (!b) return;
+        const text = b.dataset.text || '';
+        const done = () => { const old = b.textContent; b.textContent = 'Tersalin'; setTimeout(() => { b.textContent = old; }, 1200); };
+        if (navigator.clipboard && navigator.clipboard.writeText){
+            navigator.clipboard.writeText(text).then(done).catch(done);
+        } else { done(); }
+    });
+})();
+</script>
+    <?php
+}
+
+// ======================= AKSI (AJAX) =======================
 if ($action !== '') {
     $root = realpath(ADMIN_ROOT) ?: ADMIN_ROOT;
     $reply = ['ok' => false, 'messages' => []];
@@ -686,19 +1135,14 @@ if ($action !== '') {
                     );
                 }
 
-                // target_settings.json: salin template, lalu isi nama grup sebenarnya
-                // (template memakai placeholder "GROUP"). Bisa diubah lagi dari editor target.
-                $tplTargets = json_decode((string) @file_get_contents($tpl . '/target_settings.json'), true);
-                if (!is_array($tplTargets)) $tplTargets = [];
-                $tplTargets = adm_normalize_targets($tplTargets, $slug);
-                $tplTargets['group'] = strtoupper($slug);
-                if ($tplTargets['tag'] !== '') {
-                    $tplTargets['tag'] = str_replace('GROUP', strtoupper($slug), $tplTargets['tag']);
-                }
-                adm_write_targets(adm_target_file($root, $slug), $tplTargets);
+                // target_settings.json sengaja TIDAK dibuat di sini. File itu hanya
+                // dibuat saat admin menyimpan target dari editor "Target & analisis",
+                // supaya grup baru tidak punya file target yang tidak diperlukan.
 
                 $reply['ok'] = true;
-                $reply['messages'][] = adm_msg("Grup '$slug' dibuat.");
+                $reply['messages'][] = adm_msg(
+                    "Grup '$slug' dibuat. Buka 'Target & analisis' untuk mengisi target bila perlu."
+                );
             }
         }
 
@@ -1041,27 +1485,177 @@ if ($action !== '') {
             $group = trim((string) ($_POST['group'] ?? ''));
             $name  = trim((string) ($_POST['name'] ?? ''));
             $src   = $root . '/' . TRASH_DIR . '/' . $group . '/' . $name;
+            $target = trim((string) ($_POST['target'] ?? $group));
 
             if (!adm_valid_name($group) || !adm_valid_name($name) || !is_dir($src)) {
                 $reply['messages'][] = adm_msg('Data di tempat sampah tidak ditemukan.', 'err');
-            } elseif (!adm_valid_name($target = trim((string) ($_POST['target'] ?? $group)))
-                      || !is_dir($root . '/' . $target)) {
+            } elseif (!adm_valid_name($target)) {
                 $reply['messages'][] = adm_msg('Grup tujuan tidak valid.', 'err');
             } else {
-                $dest = $root . '/' . $target . '/' . $name;
+                $destGroup = $root . '/' . $target;
+                $madeGroup = false;
+
+                // Bila grup tujuan belum ada di root tapi ada di .DEPRECATED,
+                // pulihkan grupnya ke root (hanya file tingkat grup yang disalin),
+                // lalu menteenya dipindah ke dalamnya. Mentee lain di grup itu
+                // tetap di .DEPRECATED.
+                if (!is_dir($destGroup)) {
+                    $trashGroup = $root . '/' . TRASH_DIR . '/' . $target;
+                    if (is_dir($trashGroup)) {
+                        if (@mkdir($destGroup, 0755, true)) {
+                            foreach (scandir($trashGroup) ?: [] as $e) {
+                                if ($e === '.' || $e === '..') continue;
+                                $from = $trashGroup . '/' . $e;
+                                if (is_file($from)) @copy($from, $destGroup . '/' . $e);
+                            }
+                            // Kalau grup asal tidak punya index.php, buat dari template.
+                            if (!is_file($destGroup . '/index.php') && is_file(__DIR__ . '/_template/index.php')) {
+                                @copy(__DIR__ . '/_template/index.php', $destGroup . '/index.php');
+                            }
+                            if (is_file($destGroup . '/index.php')) {
+                                adm_write_manifest_path($destGroup . '/index.php', adm_group_manifest_raw_url($target));
+                            }
+                            $madeGroup = true;
+                        }
+                    }
+                }
+
+                if (!is_dir($destGroup)) {
+                    $reply['messages'][] = adm_msg('Grup tujuan tidak valid.', 'err');
+                } else {
+                    $dest = $destGroup . '/' . $name;
+                    if (is_dir($dest)) {
+                        $reply['messages'][] = adm_msg("Mentee '$name' sudah ada di grup '$target'.", 'err');
+                    } elseif (rename($src, $dest)) {
+                        $reply['ok'] = true;
+                        $reply['messages'][] = adm_msg("'$name' dipulihkan ke grup '$target'.");
+                        if ($madeGroup) {
+                            $reply['messages'][] = adm_msg("Grup '$target' dipulihkan ke root (mentee lain tetap di tempat sampah).");
+                        }
+                        // Manifest lama menunjuk grup asal; buat ulang untuk grup ini.
+                        foreach (adm_publish_mentee_manifest($root, $target, $name, is_file($dest . '/' . MENTOR_FLAG)) as $m) {
+                            $reply['messages'][] = $m;
+                        }
+                    } else {
+                        $reply['messages'][] = adm_msg('Gagal memulihkan.', 'err');
+                    }
+                }
+            }
+        }
+
+        // ---- Tandai mentee (yang sudah dihapus) sebagai "tidak lagi mentoring" ----
+        if ($action === 'retire_mentee') {
+            $group = trim((string) ($_POST['group'] ?? ''));
+            $name  = trim((string) ($_POST['name'] ?? ''));
+            $src   = $root . '/' . TRASH_DIR . '/' . $group . '/' . $name;
+
+            if (!adm_valid_name($group) || !adm_valid_name($name) || !is_dir($src)) {
+                $reply['messages'][] = adm_msg('Mentee di tempat sampah tidak ditemukan.', 'err');
+            } else {
+                $out = $root . '/' . TRASH_DIR . '/' . OUT_DIR;
+                if (!is_dir($out)) mkdir($out, 0755, true);
+                $dest = $out . '/' . $name;
+                if (is_dir($dest)) $dest = $out . '/' . $name . '-' . date('Ymd-His');
+
+                if (rename($src, $dest)) {
+                    $reply['ok'] = true;
+                    $reply['messages'][] = adm_msg("'$name' ditandai tidak lagi mentoring.");
+                } else {
+                    $reply['messages'][] = adm_msg('Gagal menandai mentee.', 'err');
+                }
+            }
+        }
+
+        // ---- Aktifkan kembali mentee yang "tidak lagi mentoring" ke sebuah grup ----
+        // Grup tujuan boleh grup aktif di root, atau grup yang ada di .DEPRECATED
+        // (grup tidak aktif). Tidak memulihkan grupnya, cukup memindahkan menteenya.
+        if ($action === 'reactivate_mentee') {
+            $name   = trim((string) ($_POST['name'] ?? ''));
+            $target = trim((string) ($_POST['target'] ?? ''));
+            $src    = $root . '/' . TRASH_DIR . '/' . OUT_DIR . '/' . $name;
+
+            $destGroup = '';
+            if (adm_valid_name($target)) {
+                if (is_dir($root . '/' . $target)) {
+                    $destGroup = $root . '/' . $target;
+                } elseif (is_dir($root . '/' . TRASH_DIR . '/' . $target)) {
+                    $destGroup = $root . '/' . TRASH_DIR . '/' . $target;
+                }
+            }
+
+            if (!adm_valid_name($name) || !is_dir($src)) {
+                $reply['messages'][] = adm_msg('Mentee tidak lagi mentoring tidak ditemukan.', 'err');
+            } elseif ($destGroup === '') {
+                $reply['messages'][] = adm_msg('Grup tujuan tidak valid.', 'err');
+            } else {
+                $dest = $destGroup . '/' . $name;
                 if (is_dir($dest)) {
                     $reply['messages'][] = adm_msg("Mentee '$name' sudah ada di grup '$target'.", 'err');
                 } elseif (rename($src, $dest)) {
                     $reply['ok'] = true;
-                    $reply['messages'][] = adm_msg("'$name' dipulihkan ke grup '$target'.");
-                    // Manifest lama menunjuk grup asal; buat ulang untuk grup ini.
-                    foreach (adm_publish_mentee_manifest($root, $target, $name, is_file($dest . '/' . MENTOR_FLAG)) as $m) {
-                        $reply['messages'][] = $m;
+                    $reply['messages'][] = adm_msg("'$name' dipindahkan ke grup '$target'.");
+                    // Manifest hanya dibuat ulang bila grupnya aktif di root (bisa diakses).
+                    if (is_dir($root . '/' . $target)) {
+                        foreach (adm_publish_mentee_manifest($root, $target, $name, is_file($dest . '/' . MENTOR_FLAG)) as $m) {
+                            $reply['messages'][] = $m;
+                        }
+                    } else {
+                        $reply['messages'][] = adm_msg("Grup '$target' tidak aktif di root; manifest tidak diubah.");
                     }
                 } else {
-                    $reply['messages'][] = adm_msg('Gagal memulihkan.', 'err');
+                    $reply['messages'][] = adm_msg('Gagal mengaktifkan kembali.', 'err');
                 }
             }
+        }
+
+        // ---- Hapus/pulihkan SELURUH grup (pindah ke tempat sampah) ----
+        if ($action === 'trash_group') {
+            $group = trim((string) ($_POST['group'] ?? ''));
+            $src   = $root . '/' . $group;
+
+            if (!adm_valid_name($group) || !is_dir($src)) {
+                $reply['messages'][] = adm_msg('Grup tidak ditemukan.', 'err');
+            } else {
+                $trash = $root . '/' . TRASH_DIR;
+                if (!is_dir($trash)) mkdir($trash, 0755, true);
+
+                // Struktur tetap seragam: .DEPRECATED/<grup>/<mentee>/.
+                // Bila folder itu sudah ada (mis. mentee yang lebih dulu dihapus),
+                // isinya digabungkan sehingga tidak ada folder ".groups" terpisah.
+                if (adm_move_merge($src, $trash . '/' . $group)) {
+                    $reply['ok'] = true;
+                    $reply['messages'][] = adm_msg(
+                        "Grup '$group' beserta seluruh mentee dipindahkan ke tempat sampah (dapat dipulihkan)."
+                    );
+                } else {
+                    $reply['messages'][] = adm_msg('Gagal memindahkan grup ke tempat sampah.', 'err');
+                }
+            }
+        }
+
+        if ($action === 'restore_group') {
+            $group = trim((string) ($_POST['group'] ?? ''));
+            $src   = $root . '/' . TRASH_DIR . '/' . $group;
+
+            if (!adm_valid_name($group) || !is_dir($src)) {
+                $reply['messages'][] = adm_msg('Grup di tempat sampah tidak ditemukan.', 'err');
+            } elseif (is_dir($root . '/' . $group)) {
+                $reply['messages'][] = adm_msg(
+                    "Grup '$group' sudah ada di root. Hapus dulu grup itu sebelum memulihkan.",
+                    'err'
+                );
+            } elseif (rename($src, $root . '/' . $group)) {
+                $reply['ok'] = true;
+                $reply['messages'][] = adm_msg("Grup '$group' dipulihkan dari tempat sampah.");
+            } else {
+                $reply['messages'][] = adm_msg('Gagal memulihkan grup.', 'err');
+            }
+        }
+
+        // ---- Tool mandiri: pembuat nama panggilan ----
+        $nn = nickname_handle($action, $root);
+        if ($nn !== null) {
+            $reply = array_merge($reply, $nn);
         }
     } catch (Throwable $e) {
         $reply['messages'][] = adm_msg('Kesalahan: ' . $e->getMessage(), 'err');
@@ -1074,7 +1668,13 @@ if ($action !== '') {
 $root    = realpath(ADMIN_ROOT) ?: ADMIN_ROOT;
 $groups  = adm_groups($root);
 $trashRoot = $root . '/' . TRASH_DIR;
-$trashGroups = is_dir($trashRoot) ? adm_subfolders($trashRoot) : [];
+$trashAll  = is_dir($trashRoot) ? adm_subfolders($trashRoot) : []; // grup di .DEPRECATED (tanpa .OUT)
+// Mentee yang tidak lagi mentoring: .DEPRECATED/.OUT/<mentee>/.
+$outDir     = $trashRoot . '/' . OUT_DIR;
+$outMentees = is_dir($outDir) ? adm_mentees($outDir) : [];
+// Semua nama grup yang dikenal: aktif di root + yang ada di .DEPRECATED.
+$allGroups  = array_values(array_unique(array_merge($groups, $trashAll)));
+sort($allGroups);
 ?>
 <!DOCTYPE html>
 <html lang="id">
@@ -1082,14 +1682,19 @@ $trashGroups = is_dir($trashRoot) ? adm_subfolders($trashRoot) : [];
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin Grup Mentoring</title>
+<link rel="icon" href="<?= adm_h(ICON_BASE) ?>/icon-192.png?rev=<?= adm_h(substr(ADM_ASSET_REV, 0, 12)) ?>">
 <style>
 :root{--bg:#061612;--surface:#0b1f1b;--surface2:#071614;--line:rgba(158,243,208,.14);
       --line2:rgba(158,243,208,.22);--text:#eefbf5;--muted:#97b2a8;--accent:#7df0c5;
-      --accent2:#ffd27d;--danger:#ff8b8b;--ok:#8ff0b0}
+      --accent2:#ffd27d;--danger:#ff8b8b;--ok:#8ff0b0;
+      --out:#c8b0ff}
 *{box-sizing:border-box}
 body{margin:0;font-family:'Segoe UI',system-ui,sans-serif;background:var(--bg);color:var(--text);padding:28px 22px 70px}
 .shell{max-width:1200px;margin:0 auto}
 header{margin-bottom:22px}
+.head-row{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.who{display:flex;align-items:center;gap:10px;margin:0}
+.who-name{color:var(--muted);font-size:.9rem}
 h1{font-size:1.7rem;margin:0 0 6px}
 h2{font-size:1.1rem;margin:0 0 12px}
 .sub{color:var(--muted);font-size:.9rem;margin:0}
@@ -1106,6 +1711,7 @@ details.panel .panel-body{padding:0 18px 18px}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 input[type=text]{background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:9px;padding:9px 12px;font:inherit;flex:1;min-width:170px}
 input[type=text]:focus{outline:2px solid var(--accent);outline-offset:1px}
+select{background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:9px;padding:9px 12px;font:inherit}
 button{font:inherit;border-radius:9px;padding:9px 14px;cursor:pointer;border:0;font-weight:700;background:var(--accent);color:#041611}
 button.ghost{background:transparent;border:1px solid var(--line2);color:var(--muted)}
 button.warn{background:transparent;border:1px solid rgba(255,139,139,.4);color:var(--danger)}
@@ -1119,6 +1725,9 @@ tr:last-child td{border-bottom:0}
 .tag.mentee{background:rgba(125,240,197,.1);color:var(--accent);border:1px solid rgba(125,240,197,.3)}
 .tag.trash{background:rgba(255,139,139,.12);color:var(--danger);border:1px solid rgba(255,139,139,.3)}
 .tag.muted{background:rgba(151,178,168,.12);color:var(--muted);border:1px solid var(--line)}
+.tag.out{background:rgba(200,176,255,.14);color:var(--out);border:1px solid rgba(200,176,255,.4)}
+.out-name{color:var(--out);font-weight:700}
+tr.out>td{background:rgba(200,176,255,.06)}
 .msgs{margin:14px 0 0;padding:0;list-style:none}
 .msgs li{padding:8px 12px;border-radius:9px;margin-bottom:7px;font-size:.88rem}
 .msgs .ok{background:rgba(143,240,176,.1);border:1px solid rgba(143,240,176,.3);color:var(--ok)}
@@ -1147,17 +1756,53 @@ details.tgt[open]>summary::before{content:'▾'}
 .tgt-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
 .tgt-note{color:var(--muted);font-size:.78rem}
 button.small{padding:5px 10px;font-size:.75rem}
+/* Popup pilih mentee untuk "Salin pesan WhatsApp" */
+.wa-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
+          background:rgba(0,0,0,.55);padding:20px;backdrop-filter:blur(2px)}
+.wa-modal[hidden]{display:none}
+.wa-box{width:100%;max-width:420px;max-height:80vh;overflow:auto;background:var(--surface);
+        border:1px solid var(--line2);border-radius:14px;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.45)}
+.wa-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+.wa-head strong{font-size:1rem}
+.wa-close{background:transparent;border:0;color:var(--muted);font-size:1.4rem;line-height:1;
+          cursor:pointer;padding:2px 8px;border-radius:8px}
+.wa-close:hover{color:var(--text);background:rgba(255,255,255,.06)}
+.wa-list{display:flex;flex-direction:column;gap:8px;margin-top:12px}
+.wa-item{width:100%;text-align:left;background:#08130f;border:1px solid var(--line2);color:var(--text);
+         border-radius:9px;padding:10px 12px;font:inherit;font-weight:600;cursor:pointer}
+.wa-item:hover{border-color:var(--accent);background:#0a1a15}
+.wa-item.copied{border-color:var(--ok);color:var(--ok)}
 </style>
 </head>
 <body>
 <div class="shell">
 <header>
-    <h1>Admin Grup Mentoring</h1>
-    <p class="sub">Grup dibaca dari folder di root (kecuali <code>test</code>). Mentee berada di dalam folder grup.
-       Folder <code>.DEPRECATED</code> adalah tempat sampah dan dapat dipulihkan.</p>
+    <div class="head-row">
+        <div>
+            <h1>Admin Grup Mentoring</h1>
+            <p class="sub">Grup dibaca dari folder di root (kecuali <code>test</code>). Mentee berada di dalam folder grup.
+               Folder <code>.DEPRECATED</code> adalah tempat sampah dan dapat dipulihkan.</p>
+        </div>
+        <form method="post" class="who">
+            <input type="hidden" name="action" value="logout">
+            <span class="who-name"><?= adm_h((string) ($_SESSION[ADMIN_SESSION_USER] ?? '')) ?></span>
+            <button class="ghost" type="submit">Keluar</button>
+        </form>
+    </div>
 </header>
 
 <ul class="msgs" id="msgs"></ul>
+
+<div class="wa-modal" id="wa-modal" hidden>
+    <div class="wa-box" role="dialog" aria-modal="true" aria-labelledby="wa-title">
+        <div class="wa-head">
+            <strong id="wa-title">Salin pesan WhatsApp</strong>
+            <button type="button" class="wa-close" aria-label="Tutup">&times;</button>
+        </div>
+        <p class="hint" id="wa-sub" style="margin:0"></p>
+        <div class="wa-list" id="wa-list"></div>
+    </div>
+</div>
 
 <datalist id="tgt-cats">
     <option value="SHOLAT WAJIB"></option>
@@ -1175,7 +1820,9 @@ button.small{padding:5px 10px;font-size:.75rem}
         <input type="text" id="g-name" placeholder="Nama grup, misal: FTI">
         <button data-act="create_group" data-from="g-name">Buat Grup</button>
     </div>
-    <p class="hint">Folder dibuat sebagai <code>&lt;root&gt;/&lt;nama&gt;/</code> beserta <code>index.php</code> dan <code>target_settings.json</code>.</p>
+    <p class="hint">Folder dibuat sebagai <code>&lt;root&gt;/&lt;nama&gt;/</code> beserta <code>index.php</code>.
+       <code>target_settings.json</code> hanya dibuat saat Anda menyimpan target dari editor
+       "Target &amp; analisis" (jadi grup baru tidak punya file target yang tidak diperlukan).</p>
 </section>
 
 <?php foreach ($groups as $g):
@@ -1186,9 +1833,16 @@ button.small{padding:5px 10px;font-size:.75rem}
     $ruleCount = is_array($targets['rules'] ?? null) ? count($targets['rules']) : 0;
 ?>
 <section class="panel">
-    <h2><a href="../<?= adm_h($g) ?>/index.php" style="color:var(--text);text-decoration:none"><?= adm_h($g) ?></a>
+    <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <a href="../<?= adm_h($g) ?>/index.php" style="color:var(--text);text-decoration:none"><?= adm_h($g) ?></a>
         <span class="tag muted"><?= count($mentes) ?> mentee</span>
         <?php if ($mentor): ?><span class="tag mentor">mentor: <?= adm_h($mentor) ?></span><?php endif; ?>
+        <span style="flex:1"></span>
+        <button class="ghost small" type="button" data-copy-wa="<?= adm_h($g) ?>"
+                data-group="<?= adm_h($g) ?>" data-origin="<?= adm_h(SITE_ORIGIN) ?>"
+                data-mentees="<?= adm_h(json_encode(array_keys($mentes), JSON_UNESCAPED_UNICODE)) ?>">Salin pesan</button>
+        <button class="warn small" data-act="trash_group" data-group="<?= adm_h($g) ?>"
+                data-confirm="Hapus grup &quot;<?= adm_h($g) ?>&quot; beserta <?= count($mentes) ?> mentee di dalamnya? Grup akan dipindahkan ke tempat sampah.">Hapus grup</button>
     </h2>
     <div class="row" style="margin-bottom:14px">
         <input type="text" id="m-<?= adm_h($g) ?>" placeholder="Nama mentee baru di grup <?= adm_h($g) ?>">
@@ -1253,31 +1907,77 @@ button.small{padding:5px 10px;font-size:.75rem}
 <?php endforeach; ?>
 
 <details class="panel">
-    <summary>Tempat Sampah <span class="tag trash"><?= count($trashGroups) ?> grup</span></summary>
+    <summary>Tempat Sampah <span class="tag trash"><?= count($trashAll) + count($outMentees) ?> item</span></summary>
     <div class="panel-body">
-    <p class="hint">Mentee di sini tidak aktif, tapi datanya masih utuh dan bisa dipulihkan.
+    <p class="hint">Grup di bawah tidak aktif di root; menteenya masih tersimpan dan bisa dipulihkan.
        Saat menambah mentee dengan nama yang sama, folder di sini otomatis dipulihkan.</p>
 
-    <?php if (!$trashGroups): ?>
-        <div class="empty">Tempat sampah kosong.</div>
-    <?php else: ?>
-        <?php foreach ($trashGroups as $tg): ?>
-            <h3 style="font-size:.95rem;margin:16px 0 8px;color:var(--muted)"><?= adm_h($tg) ?></h3>
-            <table>
-                <tbody>
-                <?php foreach (adm_mentees($trashRoot . '/' . $tg) as $name => $m): ?>
-                    <tr>
-                        <td><?= adm_h($name) ?></td>
-                        <td><?= $m['days'] ?> hari</td>
-                        <td><?= $m['isMentor'] ? '<span class="tag mentor">Mentor</span>' : '' ?></td>
-                        <td style="width:1%">
-                            <button class="ghost" data-act="restore_mentee" data-group="<?= adm_h($tg) ?>" data-name="<?= adm_h($name) ?>">Pulihkan</button>
-                        </td>
-                    </tr>
-                <?php endforeach; ?>
-                </tbody>
-            </table>
+    <?php if ($trashAll): ?>
+        <h3 style="font-size:.95rem;margin:16px 0 8px;color:var(--muted)">Grup di tempat sampah</h3>
+        <?php foreach ($trashAll as $tg): $retired = !in_array($tg, $groups, true); $mentees = adm_mentees($trashRoot . '/' . $tg); ?>
+            <div style="border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin:10px 0;background:rgba(255,255,255,.015)">
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+                    <strong><?= adm_h($tg) ?></strong>
+                    <?php if ($retired): ?>
+                        <span class="tag trash">grup tidak aktif</span>
+                        <button class="ghost" data-act="restore_group" data-group="<?= adm_h($tg) ?>">Pulihkan grup</button>
+                    <?php else: ?>
+                        <span class="tag muted">grup aktif</span>
+                    <?php endif; ?>
+                </div>
+                <?php if (!$mentees): ?>
+                    <div class="hint" style="margin:0">Tidak ada mentee di grup ini.</div>
+                <?php else: ?>
+                    <table>
+                        <tbody>
+                        <?php foreach ($mentees as $name => $m): ?>
+                            <tr>
+                                <td><?= adm_h($name) ?></td>
+                                <td><?= $m['days'] ?> hari</td>
+                                <td><?= $m['isMentor'] ? '<span class="tag mentor">Mentor</span>' : '' ?></td>
+                                <td style="width:1%;white-space:nowrap">
+                                    <button class="ghost" data-act="restore_mentee" data-group="<?= adm_h($tg) ?>" data-name="<?= adm_h($name) ?>">Pulihkan</button>
+                                    <button class="ghost" data-act="retire_mentee" data-group="<?= adm_h($tg) ?>" data-name="<?= adm_h($name) ?>"
+                                            data-confirm="Tandai &quot;<?= adm_h($name) ?>&quot; sebagai tidak lagi mentoring?">Tidak lagi mentoring</button>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                        </tbody>
+                    </table>
+                <?php endif; ?>
+            </div>
         <?php endforeach; ?>
+    <?php endif; ?>
+
+    <?php if ($outMentees): $oi = 0; ?>
+        <h3 style="font-size:.95rem;margin:16px 0 8px;color:var(--out)">Tidak lagi mentoring</h3>
+        <p class="hint">Mentee ini sudah tidak lagi mentoring. Pilih grup tujuan (aktif atau di tempat sampah),
+           lalu klik <strong>Aktif kembali</strong>.</p>
+        <table>
+            <tbody>
+            <?php foreach ($outMentees as $name => $m): $selId = 'out-target-' . $oi++; ?>
+                <tr class="out">
+                    <td><span class="out-name"><?= adm_h($name) ?></span> <span class="tag out">tidak lagi mentoring</span></td>
+                    <td><?= $m['days'] ?> hari</td>
+                    <td>
+                        <select id="<?= $selId ?>" aria-label="Grup tujuan">
+                            <?php foreach ($allGroups as $g): ?>
+                                <option value="<?= adm_h($g) ?>"><?= adm_h($g) ?><?= in_array($g, $groups, true) ? '' : ' (tidak aktif)' ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </td>
+                    <td style="width:1%">
+                        <button class="ghost" data-act="reactivate_mentee" data-name="<?= adm_h($name) ?>"
+                                data-target-from="<?= $selId ?>">Aktif kembali</button>
+                    </td>
+                </tr>
+            <?php endforeach; ?>
+            </tbody>
+        </table>
+    <?php endif; ?>
+
+    <?php if (!$trashAll && !$outMentees): ?>
+        <div class="empty">Tempat sampah kosong.</div>
     <?php endif; ?>
     </div>
 </details>
@@ -1329,6 +2029,8 @@ button.small{padding:5px 10px;font-size:.75rem}
         <li><strong>Tulis SEMUA manifest</strong> mencakup manifest tiap mentee <em>dan</em> manifest dasbor tiap grup.</li>
     </ul>
 </section>
+
+<?php nickname_render($root); ?>
 </div>
 
 <script>
@@ -1343,14 +2045,26 @@ function show(list){
     });
 }
 document.querySelectorAll('[data-act]').forEach(el=>{
-    el.addEventListener('change', e => doAction(e.target));
-    el.addEventListener('click', e => doAction(e.target));
+    // Checkbox/select/input pakai 'change' saja. Sebelumnya keduanya dipasang,
+    // sehingga checkbox (mis. toggle mentor) mengirim aksi DUA kali dan hasilnya
+    // kembali ke keadaan semula. Tombol tetap memakai 'click'.
+    if (el.matches('input, select, textarea')){
+        el.addEventListener('change', e => doAction(e.target));
+    } else {
+        el.addEventListener('click', e => doAction(e.target));
+    }
 });
 function doAction(el){
+    if (el.dataset.confirm && !window.confirm(el.dataset.confirm)) return;
+
     const body = new URLSearchParams();
     body.set('action', el.dataset.act);
     if (el.dataset.group) body.set('group', el.dataset.group);
     if (el.dataset.name)  body.set('name', el.dataset.name);
+    if (el.dataset.targetFrom){
+        const sel = document.getElementById(el.dataset.targetFrom);
+        if (sel && sel.value) body.set('target', sel.value);
+    }
 
     if (el.dataset.from){
         const input = document.getElementById(el.dataset.from);
@@ -1555,6 +2269,99 @@ function doAction(el){
     }
 
     document.querySelectorAll('details.tgt').forEach(build);
+})();
+
+// ============ Salin pesan WhatsApp (popup pilih mentee) ============
+(function(){
+    const modal = document.getElementById('wa-modal');
+    if (!modal) return;
+    const listEl  = modal.querySelector('#wa-list');
+    const subEl   = modal.querySelector('#wa-sub');
+    const titleEl = modal.querySelector('#wa-title');
+    let current = null; // { group, origin }
+
+    function close(){ modal.hidden = true; listEl.innerHTML = ''; current = null; }
+
+    // Pesan WhatsApp: codename grup & mentee (bold + code) + URL lengkap mentee.
+    // WhatsApp: *bold*, ```code``` (monospace). Digabung: *```teks```*
+    function message(group, name, origin){
+        const url = String(origin || location.origin).replace(/\/+$/, '') + '/' + group + '/' + name + '/index.php';
+        return "Assalamu'alaikum warahmatullahi wabarakatuh\n"
+             + '\n'
+             + 'Berikut tautan halaman amalan yaumiyah antum untuk mencatat amalan harian.\n'
+             + '\n'
+             + 'Amalan Yaumiyah\n'
+             + 'Grup   : *```' + group + '```*\n'
+             + 'Mentee : *```' + name + '```*\n'
+             + 'Link   : ' + url + '\n'
+             + '\n'
+             + 'Barakallahu fiik.\n'
+             + "Wassalamu'alaikum warahmatullahi wabarakatuh\n"
+             + '\n'
+             + '———\n'
+             + 'Web refleksi untuk mentee: https://refleksiformentee.xo.je';
+    }
+
+    function copyText(text){
+        if (navigator.clipboard && navigator.clipboard.writeText){
+            return navigator.clipboard.writeText(text);
+        }
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select();
+        try { document.execCommand('copy'); } catch(_){}
+        ta.remove();
+        return Promise.resolve();
+    }
+
+    modal.addEventListener('click', e => {
+        if (e.target === modal || e.target.closest('.wa-close')) close();
+    });
+    document.addEventListener('keydown', e => {
+        if (e.key === 'Escape' && !modal.hidden) close();
+    });
+
+    document.querySelectorAll('[data-copy-wa]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const group = btn.dataset.group || btn.dataset.copyWa || '';
+            const origin = btn.dataset.origin || location.origin;
+            let items = [];
+            try { items = JSON.parse(btn.dataset.mentees || '[]'); } catch(_) { items = []; }
+
+            current = { group, origin };
+            titleEl.textContent = 'Salin pesan \u2014 grup ' + group;
+            listEl.innerHTML = '';
+
+            if (!items.length){
+                subEl.textContent = 'Belum ada mentee di grup ini.';
+            } else {
+                subEl.textContent = 'Pilih mentee yang ingin disalin:';
+                items.forEach(name => {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'wa-item';
+                    b.dataset.name = name;
+                    b.textContent = name;
+                    listEl.appendChild(b);
+                });
+            }
+            modal.hidden = false;
+        });
+    });
+
+    listEl.addEventListener('click', e => {
+        const b = e.target.closest('.wa-item');
+        if (!b || !current) return;
+        const name = b.dataset.name || '';
+        const text = message(current.group, name, current.origin);
+        const done = () => {
+            b.classList.add('copied');
+            b.textContent = name + ' \u2713 tersalin';
+            show([{ type: 'ok', text: 'Pesan WhatsApp untuk \'' + name + '\' tersalin ke clipboard.' }]);
+            setTimeout(close, 900);
+        };
+        copyText(text).then(done).catch(done);
+    });
 })();
 </script>
 </body>

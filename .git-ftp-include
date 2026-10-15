@@ -1,0 +1,6 @@
+# File yang SELALU di-upload ke server FTP, walau di-ignore oleh git.
+# Format: baris yang diawali '!' = selalu upload.
+#
+# test/admin.json berisi kredensial admin terenkripsi. File ini di-ignore git
+# (tidak ikut ke GitHub), tetapi HARUS ada di server agar halaman login bekerja.
+!test/admin.json

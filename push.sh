@@ -84,9 +84,42 @@ do_ftp() {
         [ "$j" = "y" ] || { warn ".htaccess dilewati."; return 0; }
     fi
 
+    local log_before=0
+    if [ -f "$LOGFILE" ]; then
+        log_before="$(wc -l < "$LOGFILE" | tr -d '[:space:]')"
+    fi
+
     step "Push ke server FTP..."
     run git ftp push
     ok "FTP tersinkron."
+
+    # git-ftp berhenti lebih awal ("Everything up-to-date") bila tidak ada commit
+    # baru, sehingga test/admin.json (via .git-ftp-include) belum tentu ter-upload.
+    local new_log
+    new_log="$(tail -n +"$((log_before + 1))" "$LOGFILE" 2>/dev/null || true)"
+    ensure_admin_cred_uploaded "$new_log"
+}
+
+# Pastikan test/admin.json benar-benar ada di server, walau tidak ada commit baru.
+ensure_admin_cred_uploaded() {
+    local new_log="$1"
+    local cred="test/admin.json"
+    local mark=".git-ftp-admin.sha"
+
+    [ -f "$cred" ] || return 0
+
+    local want have
+    want="$(sha1sum "$cred" | awk '{print $1}')"
+    have="$(cat "$mark" 2>/dev/null || true)"
+    [ "$want" = "$have" ] && return 0
+
+    if printf '%s' "$new_log" | grep -qi 'up-to-date'; then
+        warn "Kredensial admin berubah, tetapi tidak ada commit baru."
+        warn "Upload ulang (--all) agar test/admin.json ikut terkirim..."
+        run git ftp push --all
+    fi
+    printf '%s\n' "$want" > "$mark"
+    ok "test/admin.json terkirim ke server FTP."
 }
 
 case "${1:-all}" in
