@@ -31,7 +31,7 @@ php -l index.php
 ```
 
 ## Catatan
-script push dilarang untuk push data_amalan.json ke server ftp
+coba cek kenapa pwa tidak tersedia pada proyek ini
 
 ### Completed
 - Pecah kode menggunakan Riverpod style (Modular ES Modules).

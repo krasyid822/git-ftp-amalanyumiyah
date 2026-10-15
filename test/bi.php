@@ -106,23 +106,31 @@ function bi_available_months(array $data): array
 	return $months;
 }
 
-function bi_rawatib_detail_count(array $data): int
+/**
+ * Daftar resmi opsi detail rawatib (HANYA MU'AKAD SESUAI ANJURAN).
+ * Ini sumber kebenaran jumlah opsi rawatib, BUKAN hasil hitungan key
+ * yang kebetulan ada di data.
+ *
+ * Alasan: data lama disimpan sebagai ringkasan "3/5" tanpa key detail.
+ * Kalau jumlah dihitung dari key yang ada, satu bulan yang sudah punya
+ * key detail akan membuat count jadi kecil dan ringkasan lama ("3/5")
+ * terpotong jadi "2/2".
+ */
+function bi_rawatib_detail_keys(): array
 {
-	$keys = [];
+	return [
+		'rawatib_subuh_q',
+		'rawatib_dzuhur_q',
+		'rawatib_dzuhur_b',
+		'rawatib_maghrib_b',
+		'rawatib_isya_b',
+	];
+}
 
-	foreach ($data as $monthData) {
-		if (!is_array($monthData)) {
-			continue;
-		}
-
-		foreach ($monthData as $key => $values) {
-			if (strpos((string) $key, 'rawatib_') === 0) {
-				$keys[$key] = true;
-			}
-		}
-	}
-
-	$count = count($keys);
+function bi_rawatib_detail_count(array $data = []): int
+{
+	// Jumlah opsi rawatib itu tetap, tidak bergantung pada isi data.
+	$count = count(bi_rawatib_detail_keys());
 	return $count > 0 ? $count : 5;
 }
 
@@ -526,17 +534,26 @@ function bi_parse_rawatib_day(array $monthData, int $day, int $rawatibDetailCoun
 	$rawValue = $monthData['rawatib'][$day] ?? '';
 	$hasData = bi_is_filled_value($rawValue);
 
+	// Ringkasan tersimpan "3/5". Penyebut yang tersimpan adalah catatan
+	// OTORITATIF saat itu, jadi pakai apa adanya dan jangan dipotong
+	// dengan count global - kalau tidak "3/5" jadi "3/2".
 	if (is_string($rawValue) && preg_match('/^(\d+)\s*\/\s*(\d+)$/', trim($rawValue), $match)) {
+		$storedTotal = (int) $match[2];
+		$possible = $storedTotal > 0 ? $storedTotal : $rawatibDetailCount;
 		return [
-			'done' => min((int) $match[1], $rawatibDetailCount),
-			'possible' => $rawatibDetailCount,
+			'done' => min((int) $match[1], $possible),
+			'possible' => $possible,
 			'has_data' => true,
 		];
 	}
 
+	// Hitung hanya dari key rawatib yang resmi, supaya key lain yang
+	// kebetulan diawali "rawatib_" tidak ikut terhitung.
+	$officialKeys = bi_rawatib_detail_keys();
 	$done = 0;
-	foreach ($monthData as $key => $values) {
-		if (strpos((string) $key, 'rawatib_') !== 0 || !is_array($values)) {
+	foreach ($officialKeys as $key) {
+		$values = $monthData[$key] ?? null;
+		if (!is_array($values)) {
 			continue;
 		}
 

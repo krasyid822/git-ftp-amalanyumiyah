@@ -1,3 +1,4 @@
 *.json
 .netrc
 *.log
+test/_manifest/

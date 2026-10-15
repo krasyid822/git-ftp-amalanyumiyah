@@ -18,7 +18,8 @@ import {
 import { 
     openPopover, 
     closePopover, 
-    getCurrentFormValue 
+    getCurrentFormValue,
+    getRawatibDetailMap
 } from './components/popover_editor.js';
 import { 
     syncOfflineChanges, 
@@ -197,7 +198,12 @@ document.addEventListener('DOMContentLoaded', function() {
             
             if (val !== originalVal) {
                 if (!localChanges[activeDate]) localChanges[activeDate] = {};
-                localChanges[activeDate][key] = val;
+                // Untuk rawatib, kirim peta checkbox mana yang tercentang, bukan
+                // ringkasan "2/5". Server butuh tahu WHICH agar tidak menghapus
+                // centang lain yang tidak terkirim.
+                localChanges[activeDate][key] = (key === 'rawatib')
+                    ? JSON.stringify(getRawatibDetailMap())
+                    : val;
                 
                 // Update local memory cache so it persists when switching dates
                 if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};

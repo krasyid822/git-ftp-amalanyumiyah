@@ -11,6 +11,18 @@ if (!isset($dataFile)) {
 // __DIR__ adalah konstanta PHP yang berarti "direktori dari file ini".
 // Ini memastikan path akan selalu benar, tidak peduli dari mana file ini di-include.
 
+// CATATAN: bi.php TIDAK di-load di sini. File itu mendefinisikan sebagian
+// fungsi bi_* yang sama dengan yang ada di bawah (mis. bi_normalize_quran_key),
+// sehingga meng-include-nya menimbulkan fatal "Cannot redeclare function".
+// Daftar opsi rawatib karena itu didefinisikan lokal di sini.
+const RAWATIB_DETAIL_KEYS = [
+    'rawatib_subuh_q',
+    'rawatib_dzuhur_q',
+    'rawatib_dzuhur_b',
+    'rawatib_maghrib_b',
+    'rawatib_isya_b',
+];
+
 
 // --- AJAX HANDLER ---
 // Bagian ini akan menangani request yang datang dari JavaScript (fetch)
@@ -36,6 +48,10 @@ if (isset($_POST['is_ajax'])) {
         // Proses semua amalan standar
         foreach ($daftar_amalan_ajax as $kategori) {
             foreach ($kategori as $key => $label) {
+                // 'rawatib' tidak punya input sendiri; nilainya dihitung dari
+                // checkbox detail di bawah. Jangan timpa dengan string kosong.
+                if ($key === 'rawatib') continue;
+
                 $oldVal = $dataAmalan[$bulan][$key][$hari] ?? '';
                 $newVal = $_POST[$key] ?? '';
                 $dataAmalan[$bulan][$key][$hari] = $newVal;
@@ -84,21 +100,27 @@ if (isset($_POST['is_ajax'])) {
         }
 
         // Proses Rawatib
-        $rawatib_done = 0;
-        foreach ($rawatib_details_ajax as $key => $label) {
-            $newRVal = !empty($_POST[$key]) ? '✓' : '';
-            if (($dataAmalan[$bulan][$key][$hari] ?? '') !== $newRVal) {
-                $dataAmalan[$bulan][$key][$hari] = $newRVal;
-                $dataAmalan['__metadata']['timestamps'][$tanggal][$key] = $nowStr;
+        // Kalau struktur detail tidak terkirim, JANGAN sentuh data rawatib sama sekali.
+        if (!is_array($rawatib_details_ajax) || count($rawatib_details_ajax) === 0) {
+            warn_once('rawatib_details_structure kosong, data rawatib tidak diubah.');
+        } else {
+            $rawatib_done = 0;
+            foreach ($rawatib_details_ajax as $key => $label) {
+                $newRVal = !empty($_POST[$key]) ? '✓' : '';
+                if (($dataAmalan[$bulan][$key][$hari] ?? '') !== $newRVal) {
+                    $dataAmalan[$bulan][$key][$hari] = $newRVal;
+                    $dataAmalan['__metadata']['timestamps'][$tanggal][$key] = $nowStr;
+                }
+                if ($newRVal === '✓') {
+                    $rawatib_done++;
+                }
             }
-            if ($newRVal === '✓') {
-                $rawatib_done++;
+            $rawatib_total = count($rawatib_details_ajax);
+            $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . $rawatib_total : '';
+            if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+                $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+                $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
             }
-        }
-        $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_ajax) : '';
-        if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
-            $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
-            $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
         }
 
         // Proses Istighfar
@@ -139,11 +161,30 @@ if (isset($_POST['is_ajax'])) {
         $nowStr = date('Y-m-d H:i:s');
 
         // Daftar key detail rawatib
-        $rawatib_details_keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+        $rawatib_details_keys = RAWATIB_DETAIL_KEYS;
 
         if ($key === 'rawatib') {
-            // Jika payload adalah rawatib (summary), maka value berupa JSON dari detail rawatib yang dipilih
-            $details = json_decode($value, true);
+            // Nilai bisa berupa JSON map (popover editor) atau "3/5" (form utama).
+            $details = bi_rawatib_parse_change_value($value, $rawatib_details_keys, $dataAmalan, $bulan, $hari);
+            $total = count($rawatib_details_keys);
+
+            // Kalau tidak bisa dipastikan detail mana, jangan sentuh data lama.
+            if ($details === null) {
+                $newRawatibVal = trim((string)$value);
+                if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+                    $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+                    $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
+                }
+                simpanDataAmalan($dataFile, $dataAmalan);
+                $response = [
+                    'status' => 'success',
+                    'message' => "Data berhasil diperbarui!",
+                    'updated_data' => bacaDataAmalan($dataFile)
+                ];
+                echo json_encode($response);
+                exit;
+            }
+
             $rawatib_done = 0;
             foreach ($rawatib_details_keys as $rkey) {
                 $oldR = $dataAmalan[$bulan][$rkey][$hari] ?? '';
@@ -156,7 +197,7 @@ if (isset($_POST['is_ajax'])) {
                     $rawatib_done++;
                 }
             }
-            $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+            $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . $total : '';
             if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
                 $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
                 $dataAmalan['__metadata']['timestamps'][$tanggal]['rawatib'] = $nowStr;
@@ -195,7 +236,7 @@ if (isset($_POST['is_ajax'])) {
         if (!isset($dataAmalan['__metadata'])) $dataAmalan['__metadata'] = [];
         if (!isset($dataAmalan['__metadata']['timestamps'])) $dataAmalan['__metadata']['timestamps'] = [];
         $nowStr = date('Y-m-d H:i:s');
-        $rawatib_details_keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+        $rawatib_details_keys = RAWATIB_DETAIL_KEYS;
 
         foreach ($changes as $dateStr => $dayChanges) {
             $bulan = date('Y-m', strtotime($dateStr));
@@ -206,7 +247,20 @@ if (isset($_POST['is_ajax'])) {
 
             foreach ($dayChanges as $key => $value) {
                 if ($key === 'rawatib') {
-                    $details = json_decode($value, true);
+                    $total = count($rawatib_details_keys);
+                    $details = bi_rawatib_parse_change_value($value, $rawatib_details_keys, $dataAmalan, $bulan, $hari);
+
+                    // Format "3/5" (dari form utama) atau JSON map (dari popover editor).
+                    // Kalau tidak ada detail yang bisa ditentukan, JANGAN sentuh data lama.
+                    if ($details === null) {
+                        $newRawatibVal = trim((string)$value);
+                        if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
+                            $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
+                            $dataAmalan['__metadata']['timestamps'][$dateStr]['rawatib'] = $nowStr;
+                        }
+                        continue;
+                    }
+
                     $rawatib_done = 0;
                     foreach ($rawatib_details_keys as $rkey) {
                         $oldR = $dataAmalan[$bulan][$rkey][$hari] ?? '';
@@ -219,7 +273,7 @@ if (isset($_POST['is_ajax'])) {
                             $rawatib_done++;
                         }
                     }
-                    $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . count($rawatib_details_keys) : '';
+                    $newRawatibVal = ($rawatib_done > 0) ? $rawatib_done . '/' . $total : '';
                     if (($dataAmalan[$bulan]['rawatib'][$hari] ?? '') !== $newRawatibVal) {
                         $dataAmalan[$bulan]['rawatib'][$hari] = $newRawatibVal;
                         $dataAmalan['__metadata']['timestamps'][$dateStr]['rawatib'] = $nowStr;
@@ -416,6 +470,96 @@ $rawatib_details = [
     'rawatib_maghrib_b' => '2 Rakaat setelah Maghrib →🌇',
     'rawatib_isya_b' => '2 Rakaat setelah Isya →☪️'
 ];
+
+
+/** Catatan sekali saja ke error log, supaya tidak spam per request. */
+function warn_once(string $msg): void {
+    static $seen = [];
+    if (isset($seen[$msg])) return;
+    $seen[$msg] = true;
+    error_log('[amalan] ' . $msg);
+}
+
+
+/**
+ * Terjemahkan nilai perubahan Rawatib menjadi peta detail.
+ *
+ * Nilai dari form utama berbentuk "3/5" (ringkasan, tanpa info WHICH),
+ * sedangkan popover editor mengirim JSON map {"rawatib_subuh_q":"1",...}
+ * yang tahu persis mana yang tercentang.
+ *
+ * Karena "3/5" tidak bisa menentukan WHICH mana, kita HANYA boleh
+ * memakai data lama yang tersimpan untuk mengisi detail yang belum
+ * tercentang. Kalau tidak ada cukup data, kembalikan null supaya
+ * pemanggil tidak menimpa apa pun (mencegah data terhapus).
+ *
+ * @return array<string,string>|null
+ */
+function bi_rawatib_parse_change_value($value, array $rawatib_details_keys, array $dataAmalan, string $bulan, int $hari): ?array {
+    $value = trim((string)$value);
+    $total = count($rawatib_details_keys);
+
+    // Kasus 1: JSON map dari popover editor - sumber kebenaran yang lengkap.
+    if ($value !== '' && ($value[0] === '{' || $value[0] === '[')) {
+        $decoded = json_decode($value, true);
+        if (is_array($decoded)) {
+            $details = [];
+            foreach ($rawatib_details_keys as $rkey) {
+                $details[$rkey] = !empty($decoded[$rkey]) ? '✓' : '';
+            }
+            return $details;
+        }
+    }
+
+    // Kasus 2: "done/total" dari form utama.
+    if (preg_match('#^(\d+)\s*/\s*(\d+)$#', $value, $m)) {
+        $done = (int)$m[1];
+        $target = (int)$m[2];
+
+        // Direkonsiliasi dengan data lama: pertahankan centang yang sudah ada
+        // sebanyak mungkin, karena "3/5" tidak memberi tahu WHICH mana.
+        $existing = [];
+        foreach ($rawatib_details_keys as $rkey) {
+            if (($dataAmalan[$bulan][$rkey][$hari] ?? '') === '✓') {
+                $existing[] = $rkey;
+            }
+        }
+
+        if ($done === 0) {
+            // Niat kosong semua - hapus semua centang.
+            $details = [];
+            foreach ($rawatib_details_keys as $rkey) $details[$rkey] = '';
+            return $details;
+        }
+
+        if ($done === $total) {
+            $details = [];
+            foreach ($rawatib_details_keys as $rkey) $details[$rkey] = '✓';
+            return $details;
+        }
+
+        //>$done: butuh \'done\' centang tapi tidak tahu WHICH. Pakai yang lama.
+        if (count($existing) === $done) {
+            $details = [];
+            foreach ($rawatib_details_keys as $rkey) {
+                $details[$rkey] = in_array($rkey, $existing, true) ? '✓' : '';
+            }
+            return $details;
+        }
+
+        // Jumlah tidak cocok dengan data lama - jangan menebak, jangan sentuh.
+        return null;
+    }
+
+    // Kasus 3: kosong - pengguna sengaja menghapus semua.
+    if ($value === '') {
+        $details = [];
+        foreach ($rawatib_details_keys as $rkey) $details[$rkey] = '';
+        return $details;
+    }
+
+    return null;
+}
 
 
 // --- FUNGSI-FUNGSI ---

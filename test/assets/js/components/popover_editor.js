@@ -392,6 +392,24 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
     popover.style.visibility = 'visible';
 }
 
+/**
+ * Peta rawatib detail yang sedang tercentang, mis.
+ *   { rawatib_subuh_q: 1, rawatib_isya_b: 1 }
+ *
+ * Dipakai saat menyimpan supaya server tahu WHICHcheckbox yang dicentang.
+ * Ringkasan "2/5" saja tidak cukup informasinya: server tidak boleh
+ * menebak mana yang tercentang karena berisiko menghapus data lama.
+ */
+export function getRawatibDetailMap() {
+    const form = document.getElementById('form-amalan');
+    const keys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
+    const map = {};
+    keys.forEach(rkey => {
+        if (form.elements[rkey] && form.elements[rkey].checked) map[rkey] = 1;
+    });
+    return map;
+}
+
 export function getCurrentFormValue(key) {
     const form = document.getElementById('form-amalan');
     if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
@@ -402,12 +420,8 @@ export function getCurrentFormValue(key) {
         return input ? input.value : '';
     }
     if (key === 'rawatib') {
-        const rawatibSubKeys = ['rawatib_subuh_q', 'rawatib_dzuhur_q', 'rawatib_dzuhur_b', 'rawatib_maghrib_b', 'rawatib_isya_b'];
-        let done = 0;
-        rawatibSubKeys.forEach(rkey => {
-            if (form.elements[rkey] && form.elements[rkey].checked) done++;
-        });
-        return done > 0 ? `${done}/5` : '';
+        const done = getRawatibDetailMap();
+        return Object.keys(done).length > 0 ? `${Object.keys(done).length}/5` : '';
     }
     if (key === 'istighfar') {
         return form.elements[key] ? form.elements[key].value || '' : '';

@@ -49,14 +49,21 @@ $dataBulanIni = $semuaDataAmalan[$bulan_diminta] ?? [];
 $jumlah_hari = date('t', strtotime($bulan_diminta . '-01'));
 
 // --- Hitung metrik keterlaksanaan ---
-// Cari daftar key rawatib detail jika ada dalam data (pattern rawatib_*)
-$rawatib_detail_keys = [];
-foreach ($semuaDataAmalan as $m => $mdata) {
-    foreach ($mdata as $k => $v) {
-        if (strpos($k, 'rawatib_') === 0) $rawatib_detail_keys[$k] = true;
-    }
-}
-$rawatib_detail_count = count($rawatib_detail_keys) > 0 ? count($rawatib_detail_keys) : 5; // fallback 5
+// Pakai daftar resmi opsi rawatib. Menghitung key "rawatib_*" dari isi
+// data akan merusak ringkasan lama ("3/5") kalau hanya sebagian bulan
+// yang punya key detail.
+// Daftar ini TIDAK diambil dari bi.php: file itu mendefinisikan ulang
+// beberapa fungsi bi_* yang bentrok dengan test/index.php, sehingga
+// meng-include-nya dari sini menyebabkan fatal error.
+const RAWATIB_DETAIL_KEYS = [
+    'rawatib_subuh_q',
+    'rawatib_dzuhur_q',
+    'rawatib_dzuhur_b',
+    'rawatib_maghrib_b',
+    'rawatib_isya_b',
+];
+$rawatib_detail_keys = array_flip(RAWATIB_DETAIL_KEYS);
+$rawatib_detail_count = count(RAWATIB_DETAIL_KEYS);
 
 $total_done = 0;
 $total_possible = 0;
