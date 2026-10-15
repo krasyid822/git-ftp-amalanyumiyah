@@ -469,16 +469,20 @@ export function saveCellData(dateStr, key, value, originalCell, shouldClose = tr
         }
     } else if (key === 'rawatib') {
         const details = JSON.parse(value);
+        const map = {};
         let done = 0;
         rawatibDetailsKeys.forEach(rkey => {
             const cb = form.elements[rkey];
+            const isOn = !!details[rkey];
             if (cb) {
-                cb.checked = !!details[rkey];
+                cb.checked = isOn;
                 cb.dispatchEvent(new Event('change'));
             }
-            if (details[rkey] === '✓') done++;
+            if (isOn) { map[rkey] = 1; done++; }
         });
-        value = done > 0 ? `${done}/5` : '';
+        // Simpan PETA yang mana yang tercentang, bukan ringkasan "2/5".
+        // Ringkasan tidak bisa direkonstruksi jadi checkbox saat form dimuat.
+        value = JSON.stringify(map);
     } else if (key === 'istighfar') {
         const val = parseInt(value) || 0;
         const element = form.elements[key];

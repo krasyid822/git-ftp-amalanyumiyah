@@ -46,7 +46,21 @@ export function updateTableCellVisually(cell, key, newVal) {
     cell.className = `editable-cell ${colorClass}${isToday ? ' today-column' : ''}${isUnsaved ? ' unsaved-local-change' : ''}`;
     
     let displayVal = newVal.toString().replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    if (key === 'istighfar') {
+    if (key === 'rawatib') {
+        // Nilai rawatib bisa berupa peta JSON {"rawatib_subuh_q":1,...}
+        // atau ringkasan "2/5". Sel harus tetap menampilkan "2/5".
+        const text = newVal.toString();
+        if (text.startsWith('{')) {
+            try {
+                const done = Object.keys(JSON.parse(text) || {}).length;
+                displayVal = done > 0 ? `${done}/5` : '';
+            } catch (e) { displayVal = ''; }
+        }
+        if (displayVal === '') {
+            cell.innerHTML = '';
+            return;
+        }
+    } else if (key === 'istighfar') {
          if (newVal >= 200) displayVal = '✓✓';
          else if (newVal >= 100) displayVal = '✓';
          else displayVal = '';
@@ -190,9 +204,14 @@ export function updateFormForDate(tanggalStr) {
         
     rawatibDetailsKeys.forEach(key => {
         const element = form.elements[key];
-        if(element) {
-            element.checked = (dataBulanIni[key]?.[hari] === '✓');
+        if (!element) return;
+        let isOn = (dataBulanIni[key]?.[hari] === '✓');
+        // Cache lokal bisa menyimpan peta JSON kalau belum pernah disimpan ke server.
+        const cached = semuaDataAmalan[bulan]?.[key]?.[hari];
+        if (!isOn && typeof cached === 'object' && cached !== null) {
+            isOn = !!cached[key];
         }
+        element.checked = isOn;
     });
 
     // Lock/Unlock puasa sunnah checkboxes based on date
