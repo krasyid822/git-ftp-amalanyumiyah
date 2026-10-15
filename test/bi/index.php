@@ -1,7 +1,7 @@
 <?php
 // FILE: test/bi/index.php
 
-$manifestPath = 'https://krasyid822.github.io/Drive/manifest_.json';
+$manifestPath = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/manifest_test.json';
 $analysisScope = 'all';
 $analysisRoot = dirname(__DIR__);
 $folder_name = 'SEMUA KELOMPOK';

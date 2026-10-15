@@ -12,6 +12,13 @@ export let localChanges = {};
 export let offlineSavedChanges = JSON.parse(localStorage.getItem('offlineSavedChanges') || '{}');
 export let ayyamulBidhInfo = config.ayyamulBidhInfo || {};
 
+// Baseline pembanding: salinan data yang dianggap "sudah tersimpan"
+// (data server + draft offline). `semuaDataAmalan` ikut dimutasi oleh edit
+// lokal untuk keperluan cache/UI, sehingga TIDAK bisa dipakai sebagai
+// pembanding asli. app.js memakai baselineData untuk menentukan apakah
+// benar-benar ada perubahan yang perlu disimpan.
+export let baselineData = {};
+
 // Clean up any legacy unsaved drafts from localStorage
 localStorage.removeItem('localChanges');
 
@@ -41,9 +48,18 @@ for (const dateStr in offlineSavedChanges) {
     }
 }
 
+// Baseline awal = data server + draft offline yang sudah dimuat.
+snapshotBaseline();
+
+/** Simpan salinan data saat ini sebagai baseline pembanding. */
+export function snapshotBaseline() {
+    baselineData = JSON.parse(JSON.stringify(semuaDataAmalan));
+}
+
 export function updateSemuaDataAmalan(newData) {
     semuaDataAmalan = newData;
     saveDataToLocalCache();
+    snapshotBaseline();
 }
 
 export function saveDataToLocalCache() {

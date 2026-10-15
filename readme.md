@@ -32,8 +32,11 @@ php -l index.php
 
 ## Catatan
 
-
 ### Completed
+- Perbaiki deteksi perubahan: mengembalikan data ke nilai sebelumnya kini dianggap "tidak ada perubahan", tombol Simpan ikut hilang (dipakai baseline pembanding terpisah dari cache lokal).
+- `admin.php`: kartu Tempat Sampah collapse secara default.
+- Template `index.php` grup & mentee tidak lagi memakai manifest placeholder; admin mengisi `$manifestPath` otomatis saat grup/mentee dibuat.
+- Tambah manifest dasbor grup (`manifest_<grup>.json`) + tombol "Tulis manifest grup"; "Tulis SEMUA manifest" kini mencakup manifest grup.
 - Pecah kode menggunakan Riverpod style (Modular ES Modules).
 - Pecah kode berdasarkan fungsi, satu kode satu fungsi.
 - Hapus file/kode yang tidak digunakan (`test/prayer_slider_handler.php`, `test/test_run.php`).

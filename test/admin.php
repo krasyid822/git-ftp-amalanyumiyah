@@ -322,6 +322,47 @@ function adm_manifest_raw_url(string $mentee): string {
          . '/' . MANIFEST_BRANCH . '/' . adm_manifest_filename($mentee);
 }
 
+/** Nama file manifest untuk halaman dasbor grup: manifest_<grup>.json */
+function adm_group_manifest_filename(string $group): string {
+    return 'manifest_' . $group . '.json';
+}
+
+/** URL raw GitHub manifest grup. */
+function adm_group_manifest_raw_url(string $group): string {
+    return 'https://raw.githubusercontent.com/' . MANIFEST_REPO
+         . '/' . MANIFEST_BRANCH . '/' . adm_group_manifest_filename($group);
+}
+
+/**
+ * Bangun manifest PWA untuk halaman dasbor grup (halaman analisis).
+ * start_url & scope menunjuk ke folder grup, bukan folder mentee.
+ */
+function adm_build_group_manifest(string $group): array {
+    $up        = strtoupper(str_replace(['_', '-'], ' ', $group));
+    $groupSlug = rawurlencode($group);
+    $base      = SITE_ORIGIN . '/' . $groupSlug . '/';
+
+    return [
+        'name'             => 'Dashboard Grup ' . $up,
+        'short_name'       => 'Grup ' . $up,
+        'description'      => 'Analisis amalan seluruh anggota grup ' . $up . '.',
+        'lang'             => 'id-ID',
+        'dir'              => 'ltr',
+        'display'          => 'standalone',
+        'background_color' => '#FFFFFF',
+        'theme_color'      => '#2E8B57',
+        'orientation'      => 'portrait-primary',
+        'scope'            => $base,
+        'start_url'        => $base . 'index.php?utm_source=pwa',
+        'id'               => $base,
+        'icons' => [
+            ['src' => ICON_BASE . '/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png', 'purpose' => 'any'],
+            ['src' => ICON_BASE . '/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'any'],
+            ['src' => ICON_BASE . '/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'maskable'],
+        ],
+    ];
+}
+
 /**
  * Bangun isi manifest PWA untuk satu mentee.
  *
@@ -395,7 +436,39 @@ function adm_write_manifest(string $mentee, string $group, bool $isMentor): arra
         return ['ok' => false, 'error' => "Gagal menulis $file. Periksa hak akses folder."];
     }
 
-    return ['ok' => true, 'file' => $file, 'url' => adm_manifest_raw_url($mentee)];
+    return ['ok' => true, 'file' => $file, 'url' => adm_manifest_raw_url($mentee), 'json' => $json . "\n"];
+}
+
+/**
+ * Tulis manifest mentee ke folder lokal, terbitkan ke repo (bila token ada),
+ * lalu arahkan index.php-nya ke raw URL. Mengembalikan daftar pesan.
+ * Dipakai saat mentee dibuat/dipulihkan supaya tidak memakai manifest placeholder.
+ */
+function adm_publish_mentee_manifest(string $root, string $group, string $mentee, bool $isMentor): array {
+    $msgs = [];
+    $res  = adm_write_manifest($mentee, $group, $isMentor);
+    if (!$res['ok']) {
+        return [adm_msg($res['error'], 'err')];
+    }
+
+    if (adm_gh_token() !== '') {
+        $pr = adm_gh_put(adm_manifest_filename($mentee), $res['json'], "manifest: $group/$mentee");
+        $msgs[] = adm_msg(
+            $pr['ok']
+                ? "Manifest '$mentee' diterbitkan ke repo."
+                : "Manifest lokal dibuat, tapi gagal ke repo: {$pr['error']}",
+            $pr['ok'] ? 'ok' : 'err'
+        );
+    } else {
+        $msgs[] = adm_msg("Manifest '$mentee' dibuat lokal. Terbitkan lewat 'Tulis ke GitHub'.", 'ok');
+    }
+
+    $idx = $root . '/' . $group . '/' . $mentee . '/index.php';
+    $msgs[] = adm_write_manifest_path($idx, adm_manifest_raw_url($mentee))
+        ? adm_msg("index.php '$mentee' diarahkan ke manifest raw.", 'ok')
+        : adm_msg("Gagal menulis index.php '$mentee'.", 'err');
+
+    return $msgs;
 }
 
 /** Daftar file manifest yang sudah ada di folder lokal. */
@@ -409,6 +482,47 @@ function adm_local_manifests(): array {
     }
     sort($out);
     return $out;
+}
+
+/**
+ * Tuliskan/ubah baris $manifestPath di sebuah file index.php.
+ * Mengganti nilai lama apa pun (termasuk placeholder). Bila baris belum ada,
+ * disisipkan tepat setelah tag <?php.
+ */
+function adm_write_manifest_path(string $file, string $url): bool {
+    if (!is_file($file)) return false;
+    $src = (string) @file_get_contents($file);
+    if ($src === '') return false;
+
+    $line = '$manifestPath = ' . var_export($url, true) . ';';
+    $new  = preg_replace('/\$manifestPath\s*=\s*[\'"][^\'"]*[\'"]\s*;/', $line, $src, 1, $n);
+
+    if ($new === null) return false;
+    if ($n === 0) {
+        // Belum ada baris $manifestPath -> sisipkan setelah <?php.
+        $new = preg_replace('/(<\?php\s*\R)/', '$1' . $line . "\n", $src, 1, $n2);
+        if ($new === null || $n2 === 0) return false;
+    }
+    if ($new === $src) return true; // sudah sama
+
+    return @file_put_contents($file, $new) !== false;
+}
+
+/** Tulis salinan lokal manifest grup ke test/_manifest/. */
+function adm_write_group_manifest(string $group): array {
+    if (!is_dir(MANIFEST_LOCAL_DIR)) mkdir(MANIFEST_LOCAL_DIR, 0755, true);
+
+    $json = json_encode(adm_build_group_manifest($group), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($json === false) {
+        return ['ok' => false, 'error' => 'Gagal encodes JSON manifest grup.'];
+    }
+
+    $file = MANIFEST_LOCAL_DIR . '/' . adm_group_manifest_filename($group);
+    if (@file_put_contents($file, $json . "\n") === false) {
+        return ['ok' => false, 'error' => "Gagal menulis $file. Periksa hak akses folder."];
+    }
+
+    return ['ok' => true, 'file' => $file, 'url' => adm_group_manifest_raw_url($group), 'json' => $json . "\n"];
 }
 
 // ======================= TARGET SETTINGS (target_settings.json) =======================
@@ -545,6 +659,33 @@ if ($action !== '') {
                 mkdir($new, 0755, true);
                 copy($tpl . '/index.php', $new . '/index.php');
 
+                // index.php: ganti placeholder {{GROUP}} bila ada, agar komentar
+                // menunjuk folder sebenarnya.
+                $idx = (string) @file_get_contents($new . '/index.php');
+                if (str_contains($idx, '{{GROUP}}')) {
+                    @file_put_contents($new . '/index.php', str_replace('{{GROUP}}', $slug, $idx));
+                }
+
+                // index.php: arahkan manifest ke manifest_<grup>.json (bukan placeholder).
+                adm_write_manifest_path($new . '/index.php', adm_group_manifest_raw_url($slug));
+
+                // Tulis salinan lokal manifest grup, lalu terbitkan ke repo bila token ada.
+                $gm = adm_write_group_manifest($slug);
+                if ($gm['ok'] && adm_gh_token() !== '') {
+                    $pr = adm_gh_put(adm_group_manifest_filename($slug), $gm['json'], "manifest: grup $slug");
+                    $reply['messages'][] = adm_msg(
+                        $pr['ok']
+                            ? "Manifest grup '$slug' diterbitkan ke repo."
+                            : "Manifest grup dibuat lokal, tapi gagal ke repo: {$pr['error']}",
+                        $pr['ok'] ? 'ok' : 'err'
+                    );
+                } else {
+                    $reply['messages'][] = adm_msg(
+                        "Manifest grup dibuat lokal. Terbitkan lewat tombol 'Tulis manifest grup'.",
+                        'ok'
+                    );
+                }
+
                 // target_settings.json: salin template, lalu isi nama grup sebenarnya
                 // (template memakai placeholder "GROUP"). Bisa diubah lagi dari editor target.
                 $tplTargets = json_decode((string) @file_get_contents($tpl . '/target_settings.json'), true);
@@ -598,6 +739,10 @@ if ($action !== '') {
                                 "Mentee '$slug' ditemukan di tempat sampah grup '{$trashed['group']}' "
                                 . "- data lama dipulihkan ke grup '$group', bukan dibuat baru."
                             );
+                            // Manifest lama menunjuk grup asal; buat ulang untuk grup ini.
+                            foreach (adm_publish_mentee_manifest($root, $group, $slug, is_file($dest . '/' . MENTOR_FLAG)) as $m) {
+                                $reply['messages'][] = $m;
+                            }
                         } else {
                             $reply['messages'][] = adm_msg('Gagal memulihkan dari tempat sampah.', 'err');
                         }
@@ -605,9 +750,19 @@ if ($action !== '') {
                         mkdir($dest, 0755, true);
                         copy($tpl . '/index.php', $dest . '/index.php');
                         copy($tpl . '/download.php', $dest . '/download.php');
+
+                        // Ganti placeholder {{MENTEE}} bila ada (komentar menunjuk folder sebenarnya).
+                        $midx = (string) @file_get_contents($dest . '/index.php');
+                        if (str_contains($midx, '{{MENTEE}}')) {
+                            @file_put_contents($dest . '/index.php', str_replace('{{MENTEE}}', $slug, $midx));
+                        }
+
                         file_put_contents($dest . '/data_amalan.json', "{}\n");
                         $reply['ok'] = true;
                         $reply['messages'][] = adm_msg("Mentee '$slug' dibuat di grup '$group'.");
+                        foreach (adm_publish_mentee_manifest($root, $group, $slug, false) as $m) {
+                            $reply['messages'][] = $m;
+                        }
                     }
                 }
             }
@@ -713,6 +868,16 @@ if ($action !== '') {
         if ($action === 'gh_publish_all') {
             $ok = 0; $fail = 0; $errors = [];
             foreach (adm_groups($root) as $g) {
+                // Manifest halaman dasbor grup (manifest_<grup>.json).
+                $gm = adm_write_group_manifest($g);
+                if ($gm['ok']) {
+                    $r = adm_gh_put(adm_group_manifest_filename($g), $gm['json'], "manifest: grup $g");
+                    if ($r['ok']) $ok++;
+                    else { $fail++; $errors[] = "grup $g: " . $r['error']; }
+                } else {
+                    $fail++; $errors[] = "grup $g: " . $gm['error'];
+                }
+
                 foreach (adm_subfolders($root . '/' . $g) as $m) {
                     $manifest = adm_build_manifest($m, $g, is_file($root . '/' . $g . '/' . $m . '/' . MENTOR_FLAG));
                     $json = json_encode($manifest, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
@@ -784,29 +949,42 @@ if ($action !== '') {
 
             if (!adm_valid_name($group) || !adm_valid_name($name) || !is_file($file)) {
                 $reply['messages'][] = adm_msg('Mentee tidak ditemukan.', 'err');
+            } elseif (adm_write_manifest_path($file, adm_manifest_raw_url($name))) {
+                $reply['ok'] = true;
+                $reply['messages'][] = adm_msg("index.php mentee '$name' diarahkan ke manifest raw.");
             } else {
-                $src = (string) @file_get_contents($file);
-                $url = adm_manifest_raw_url($name);
+                $reply['messages'][] = adm_msg('Gagal menulis index.php. Periksa hak akses.', 'err');
+            }
+        }
 
-                // Ganti nilai $manifestPath yang ada, atau tambahkan bila belum ada.
-                $new = preg_replace(
-                    '/\$manifestPath\s*=\s*[\'"][^\'"]*[\'"]\s*;/',
-                    '$manifestPath = ' . var_export($url, true) . ';',
-                    $src,
-                    1,
-                    $n
-                );
+        /**
+         * Terbitkan manifest halaman dasbor grup ke repo, lalu arahkan
+         * index.php grup ke raw URL-nya (memperbaiki placeholder template).
+         */
+        if ($action === 'publish_group') {
+            $group = trim((string) ($_POST['group'] ?? ''));
 
-                if ($n === 0) {
-                    // Belum ada baris manifestPath -> sisipkan setelah <?php
-                    $new = preg_replace('/(<\?php\s*\R)/', "$1\$manifestPath = " . var_export($url, true) . ";\n", $src, 1);
-                }
-
-                if ($new !== null && $new !== $src && @file_put_contents($file, $new) !== false) {
-                    $reply['ok'] = true;
-                    $reply['messages'][] = adm_msg("index.php mentee '$name' diarahkan ke manifest raw.");
+            if (!adm_valid_name($group) || !is_dir($root . '/' . $group)) {
+                $reply['messages'][] = adm_msg('Grup tidak ditemukan.', 'err');
+            } else {
+                $gm = adm_write_group_manifest($group);
+                if (!$gm['ok']) {
+                    $reply['messages'][] = adm_msg($gm['error'], 'err');
                 } else {
-                    $reply['messages'][] = adm_msg('Gagal menulis index.php. Periksa hak akses.', 'err');
+                    $pr = adm_gh_put(adm_group_manifest_filename($group), $gm['json'], "manifest: grup $group");
+                    if ($pr['ok']) {
+                        $reply['ok'] = true;
+                        $reply['messages'][] = adm_msg("Manifest grup '$group' ditulis ke repo.");
+                    } else {
+                        $reply['messages'][] = adm_msg('Gagal menulis ke repo: ' . $pr['error'], 'err');
+                    }
+
+                    $idx = $root . '/' . $group . '/index.php';
+                    if (adm_write_manifest_path($idx, adm_group_manifest_raw_url($group))) {
+                        $reply['messages'][] = adm_msg("index.php grup '$group' diarahkan ke manifest raw.");
+                    } else {
+                        $reply['messages'][] = adm_msg('Gagal menulis index.php grup.', 'err');
+                    }
                 }
             }
         }
@@ -876,6 +1054,10 @@ if ($action !== '') {
                 } elseif (rename($src, $dest)) {
                     $reply['ok'] = true;
                     $reply['messages'][] = adm_msg("'$name' dipulihkan ke grup '$target'.");
+                    // Manifest lama menunjuk grup asal; buat ulang untuk grup ini.
+                    foreach (adm_publish_mentee_manifest($root, $target, $name, is_file($dest . '/' . MENTOR_FLAG)) as $m) {
+                        $reply['messages'][] = $m;
+                    }
                 } else {
                     $reply['messages'][] = adm_msg('Gagal memulihkan.', 'err');
                 }
@@ -912,6 +1094,15 @@ h1{font-size:1.7rem;margin:0 0 6px}
 h2{font-size:1.1rem;margin:0 0 12px}
 .sub{color:var(--muted);font-size:.9rem;margin:0}
 .panel{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:18px;margin-bottom:18px}
+
+/* Kartu panel yang bisa dilipat (mis. Tempat Sampah, tertutup secara default). */
+details.panel{padding:0}
+details.panel>summary{cursor:pointer;padding:18px;font-weight:700;font-size:1.1rem;display:flex;gap:8px;align-items:center;flex-wrap:wrap;list-style:none}
+details.panel>summary::-webkit-details-marker{display:none}
+details.panel>summary::before{content:'▸';color:var(--muted);font-size:.95rem}
+details.panel[open]>summary::before{content:'▾'}
+details.panel>summary:hover{color:var(--accent)}
+details.panel .panel-body{padding:0 18px 18px}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
 input[type=text]{background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:9px;padding:9px 12px;font:inherit;flex:1;min-width:170px}
 input[type=text]:focus{outline:2px solid var(--accent);outline-offset:1px}
@@ -1004,6 +1195,19 @@ button.small{padding:5px 10px;font-size:.75rem}
         <button data-act="create_mentee" data-group="<?= adm_h($g) ?>" data-from="m-<?= adm_h($g) ?>">Tambah Mentee</button>
     </div>
 
+    <?php
+        $gManifestUrl    = adm_group_manifest_raw_url($g);
+        $gManifestLinked = str_contains((string) @file_get_contents($root . '/' . $g . '/index.php'), $gManifestUrl);
+    ?>
+    <div class="row" style="margin-bottom:14px;align-items:center;flex-wrap:wrap;gap:8px">
+        <span class="hint" style="margin:0">Manifest grup</span>
+        <?= $gManifestLinked
+            ? '<span class="tag mentee">index ✓</span>'
+            : '<span class="tag trash">index belum diarahkan</span>' ?>
+        <button class="ghost" data-act="publish_group" data-group="<?= adm_h($g) ?>">Tulis manifest grup</button>
+        <a class="tag muted" href="<?= adm_h($gManifestUrl) ?>" target="_blank" rel="noopener"><?= adm_h(adm_group_manifest_filename($g)) ?></a>
+    </div>
+
     <?php if (!$mentes): ?>
         <div class="empty">Belum ada mentee di grup ini.</div>
     <?php else: ?>
@@ -1048,8 +1252,9 @@ button.small{padding:5px 10px;font-size:.75rem}
 </section>
 <?php endforeach; ?>
 
-<section class="panel">
-    <h2>Tempat Sampah <span class="tag trash"><?= count($trashGroups) ?> grup</span></h2>
+<details class="panel">
+    <summary>Tempat Sampah <span class="tag trash"><?= count($trashGroups) ?> grup</span></summary>
+    <div class="panel-body">
     <p class="hint">Mentee di sini tidak aktif, tapi datanya masih utuh dan bisa dipulihkan.
        Saat menambah mentee dengan nama yang sama, folder di sini otomatis dipulihkan.</p>
 
@@ -1074,7 +1279,8 @@ button.small{padding:5px 10px;font-size:.75rem}
             </table>
         <?php endforeach; ?>
     <?php endif; ?>
-</section>
+    </div>
+</details>
 
 <section class="panel">
     <h2>Manifest PWA &rarr; GitHub</h2>
@@ -1108,7 +1314,9 @@ button.small{padding:5px 10px;font-size:.75rem}
         <code style="font-size:.8rem"><?= count(adm_local_manifests()) ?> salinan lokal di test/_manifest/</code>
     </div>
     <p class="hint">Per-bar: pakai tombol <strong>Tulis ke GitHub</strong> di tabel mentee.
-       Tombol <strong>Arahkan index</strong> menuliskan raw URL ke <code>index.php</code> mentee.</p>
+       Tombol <strong>Arahkan index</strong> menuliskan raw URL ke <code>index.php</code> mentee.
+       Untuk halaman dasbor grup, pakai tombol <strong>Tulis manifest grup</strong> di tiap panel grup
+       (menulis <code>manifest_&lt;grup&gt;.json</code> sekaligus mengarahkan <code>index.php</code> grup).</p>
 
     <h3 style="font-size:.95rem;margin:18px 0 8px;color:var(--muted)">3. Isi repo (dibaca dari GitHub)</h3>
     <div id="gh-files"><p class="hint">Klik <strong>Daftar file di repo</strong> untuk memuat isi repository.</p></div>
@@ -1118,6 +1326,7 @@ button.small{padding:5px 10px;font-size:.75rem}
         <li>Raw URL punya cache ±2 menit setelah commit. Untuk jenama ulang: hapus PWA dari layar utama, lalu buka lagi.</li>
         <li>Manifest ditulis ulang tiap kali tombol ditekan. Nilai yang diubah manual di GitHub akan tertimpa.</li>
         <li>Semua file yang tidak diawali <code>manifest_</code> di repo itu akan diabaikan dan tidak disentuh.</li>
+        <li><strong>Tulis SEMUA manifest</strong> mencakup manifest tiap mentee <em>dan</em> manifest dasbor tiap grup.</li>
     </ul>
 </section>
 </div>

@@ -1,5 +1,6 @@
 import { 
     semuaDataAmalan, 
+    baselineData,
     localChanges, 
     offlineSavedChanges, 
     ayyamulBidhInfo, 
@@ -8,7 +9,8 @@ import {
     clearOfflineSavedChanges, 
     updateSyncStatus, 
     showToast,
-    displayName
+    displayName,
+    snapshotBaseline
 } from './providers/state_provider.js';
 import { 
     updateFormForDate, 
@@ -152,7 +154,10 @@ document.addEventListener('DOMContentLoaded', function() {
             }
             localStorage.setItem('offlineSavedChanges', JSON.stringify(offlineSavedChanges));
             clearLocalChanges();
-            
+
+            // Draft offline kini jadi baseline baru (bukan lagi perubahan tertunda).
+            snapshotBaseline();
+
             showToast('Data berhasil disimpan secara lokal (Offline)!', 'success');
             updateFormForDate._skipScroll = true;
             updateFormForDate(tanggalInput.value);
@@ -199,9 +204,12 @@ document.addEventListener('DOMContentLoaded', function() {
             const val = getCurrentFormValue(key);
             const day = new Date(activeDate + 'T00:00:00').getDate();
             const bulan = activeDate.substring(0, 7);
-            const originalVal = semuaDataAmalan[bulan]?.[key]?.[day] ?? '';
-            
-            if (val !== originalVal) {
+            // Pembanding = baseline (data tersimpan), BUKAN semuaDataAmalan yang
+            // ikut berubah saat diedit. Dengan ini, mengembalikan nilai ke aslinya
+            // terdeteksi sebagai "tidak ada perubahan".
+            const originalVal = baselineData[bulan]?.[key]?.[day] ?? '';
+
+            if (String(val) !== String(originalVal)) {
                 if (!localChanges[activeDate]) localChanges[activeDate] = {};
                 // Untuk rawatib, kirim peta checkbox mana yang tercentang, bukan
                 // ringkasan "2/5". Server butuh tahu WHICH agar tidak menghapus
@@ -223,6 +231,19 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 if (localChanges[activeDate]) {
                     delete localChanges[activeDate][key];
+                }
+
+                // Nilai kembali sama dengan baseline: pulihkan cache & tampilan sel
+                // bila sebelumnya sempat berubah karena edit di sesi ini.
+                if (String(semuaDataAmalan[bulan]?.[key]?.[day] ?? '') !== String(originalVal)) {
+                    if (!semuaDataAmalan[bulan]) semuaDataAmalan[bulan] = {};
+                    if (!semuaDataAmalan[bulan][key]) semuaDataAmalan[bulan][key] = {};
+                    semuaDataAmalan[bulan][key][day] = originalVal;
+
+                    const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`);
+                    if (cell) {
+                        updateTableCellVisually(cell, key, originalVal);
+                    }
                 }
             }
         });

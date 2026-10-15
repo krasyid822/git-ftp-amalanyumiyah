@@ -1,6 +1,8 @@
 import { 
     semuaDataAmalan, 
+    baselineData,
     setLocalChange, 
+    removeLocalChange,
     updateSyncStatus 
 } from '../providers/state_provider.js';
 import { updateTableCellVisually } from './table_view.js';
@@ -467,6 +469,41 @@ export function getCurrentFormValue(key) {
     return '';
 }
 
+function safeJsonParse(str) {
+    try { return JSON.parse(str); } catch (e) { return null; }
+}
+
+/**
+ * Apakah `value` (nilai yang baru diisi) sama dengan data tersimpan (baseline)
+ * untuk tanggal & key ini? Dipakai agar mengembalikan nilai ke aslinya TIDAK
+ * dianggap sebagai perubahan, sehingga tombol Simpan ikut hilang.
+ */
+export function isValueUnchanged(dateStr, key, value) {
+    const bulan = dateStr.substring(0, 7);
+    const day = String(parseInt(dateStr.substring(8, 10), 10));
+    const base = baselineData[bulan]?.[key]?.[day] ?? '';
+
+    if (key === 'rawatib') {
+        const cur = safeJsonParse(value) || {};
+        const curKeys = Object.keys(cur).filter(k => cur[k]).sort().join(',');
+        // Baseline bisa berupa peta JSON (belum tersimpan ke server) atau
+        // ringkasan "N/5" (dari server). Bandingkan sesuai bentuknya.
+        if (typeof base === 'string' && base.trim().startsWith('{')) {
+            const b = safeJsonParse(base) || {};
+            return Object.keys(b).filter(k => b[k]).sort().join(',') === curKeys;
+        }
+        const m = String(base).match(/^(\d+)\s*\/\s*\d+/);
+        const baseCount = m ? parseInt(m[1], 10) : 0;
+        return Object.keys(cur).filter(k => cur[k]).length === baseCount;
+    }
+
+    if (key === 'istighfar') {
+        return (parseInt(value, 10) || 0) === (parseInt(base, 10) || 0);
+    }
+
+    return String(value ?? '') === String(base ?? '');
+}
+
 export function saveCellData(dateStr, key, value, originalCell, shouldClose = true) {
     const day = originalCell.dataset.day;
     const cell = document.querySelector(`.table-container table tbody td[data-key="${key}"][data-day="${day}"]`) || originalCell;
@@ -550,7 +587,13 @@ export function saveCellData(dateStr, key, value, originalCell, shouldClose = tr
         }
     }
 
-    setLocalChange(dateStr, key, value);
+    // Catat perubahan hanya bila nilainya benar-benar beda dari data tersimpan.
+    // Kalau dikembalikan ke nilai semula, hapus dari daftar perubahan.
+    if (isValueUnchanged(dateStr, key, value)) {
+        removeLocalChange(dateStr, key);
+    } else {
+        setLocalChange(dateStr, key, value);
+    }
 
     // Update semuaDataAmalan local cache
     const bulan = dateStr.substring(0, 7);
