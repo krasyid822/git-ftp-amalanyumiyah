@@ -31,7 +31,6 @@ php -l index.php
 ```
 
 ## Catatan
-coba cek kenapa pwa tidak tersedia pada proyek ini
 
 
 ### Completed
