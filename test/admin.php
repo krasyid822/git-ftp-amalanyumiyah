@@ -31,7 +31,7 @@ const RESERVED_DIRS = ['test', TRASH_DIR, '.git', 'assets'];
 const MANIFEST_REPO   = 'krasyid822/for-manifest-json-pwa';
 const MANIFEST_BRANCH = 'main';
 const SITE_ORIGIN     = 'https://amalanyaumiyah.xo.je';
-const ICON_BASE       = 'https://krasyid822.github.io/Drive';
+const ICON_BASE       = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons';
 const MANIFEST_LOCAL_DIR = __DIR__ . '/_manifest';
 const GITHUB_TOKEN_FILE  = MANIFEST_LOCAL_DIR . '/.token';
 const GITHUB_USER_AGENT = 'amalanyaumiyah-admin';
@@ -347,9 +347,9 @@ function adm_build_manifest(string $mentee, string $group, bool $isMentor): arra
         'start_url'        => $base . 'index.php?utm_source=pwa',
         'id'               => $base,
         'icons' => [
-            ['src' => ICON_BASE . '/icon-192.svg', 'sizes' => '192x192', 'type' => 'image/svg+xml', 'purpose' => 'any'],
-            ['src' => ICON_BASE . '/icon-512.svg', 'sizes' => '512x512', 'type' => 'image/svg+xml', 'purpose' => 'any'],
-            ['src' => ICON_BASE . '/icon-512.svg', 'sizes' => '512x512', 'type' => 'image/svg+xml', 'purpose' => 'maskable'],
+            ['src' => ICON_BASE . '/icon-192.png', 'sizes' => '192x192', 'type' => 'image/png', 'purpose' => 'any'],
+            ['src' => ICON_BASE . '/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'any'],
+            ['src' => ICON_BASE . '/icon-512.png', 'sizes' => '512x512', 'type' => 'image/png', 'purpose' => 'maskable'],
         ],
         'shortcuts' => [
             [
