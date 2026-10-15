@@ -2,7 +2,7 @@
 // FILE: ahmad/index.php
 
 // 1. Definisikan path ke manifest LOKAL
-$manifestPath = 'https://krasyid822.github.io/Drive/manifest_.json';
+$manifestPath = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/manifest_ilham.json';
 
 // 2. Ambil nama folder saat ini
 $folder_name = basename(__DIR__);
