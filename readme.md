@@ -32,7 +32,7 @@ php -l index.php
 
 ## Catatan
 coba cek kenapa pwa tidak tersedia pada proyek ini
-token boleh di push ke server ftp tapi jangan push ke repo github
+
 
 ### Completed
 - Pecah kode menggunakan Riverpod style (Modular ES Modules).
