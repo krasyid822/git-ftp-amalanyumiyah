@@ -9,6 +9,12 @@
 #   3) Jadi test/admin.json saja tidak cukup untuk membuka kredensial.
 #   test/admin.json TIDAK ikut ke GitHub, tetapi IKUT ke server FTP.
 #
+# PENTING: file ini juga menyimpan kunci enkripsi rahasia (token GitHub & kunci
+#   OpenRouter) yang ditambal lewat panel "Keamanan rahasia" di admin.php.
+#   Menghapus / membuat ulang test/admin.json akan menghilangkan kunci itu,
+#   sehingga berkas rahasia terenkripsi menjadi tidak bisa dibuka (terkunci).
+#   Bila itu terjadi, cukup isi ulang token/kunci lewat admin.php.
+#
 # Skrip MENOLAK berjalan bila test/admin.json sudah ada.
 #
 # Cara pakai: ./create-admin.sh   (tanya username & password)
@@ -27,7 +33,7 @@ warn() { printf '%b !  %b%s\n' "$YELLOW" "$NC" "$*"; }
 err()  { printf '%bERR%b %s\n' "$RED" "$NC" "$*" >&2; }
 
 usage() {
-    sed -n '3,14p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '3,20p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-}" in

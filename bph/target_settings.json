@@ -1,0 +1,78 @@
+{
+    "group": "KEWAJIBAN YAUMIYAH",
+    "title": "Kewajiban Yaumiyah",
+    "greeting": "Istiqomah dalam melaksanakannya :)",
+    "intro": "Mari kerjakan hal kecil ini :v",
+    "closing": "",
+    "tag": "yaumiyah",
+    "rules": [
+        {
+            "category": "SHOLAT WAJIB",
+            "label": "Sholat Berjamaah",
+            "target": "5 kali per hari",
+            "period": "day",
+            "target_count": 5,
+            "mode": "value_count",
+            "match_value": "M,R-J",
+            "detail": "",
+            "data_keys": [
+                "subuh",
+                "dzuhur",
+                "ashar",
+                "maghrib",
+                "isya"
+            ]
+        },
+        {
+            "category": "TILAWAH",
+            "label": "Tilawah Qur'an",
+            "target": "1 lembar per hari",
+            "period": "day",
+            "target_count": 1,
+            "mode": "quran_sheet_count",
+            "pages_per_sheet": 2,
+            "source_dataset": "test/dataset_halaman_quran.csv",
+            "detail": "",
+            "data_keys": [
+                "tilawah"
+            ]
+        },
+        {
+            "category": "SHOLAT SUNNAH",
+            "label": "Sholat Dhuha",
+            "target": "1 kali per hari",
+            "period": "day",
+            "target_count": 1,
+            "mode": "day_presence",
+            "detail": "",
+            "data_keys": [
+                "dhuha"
+            ]
+        },
+        {
+            "category": "SHOLAT SUNNAH",
+            "label": "Sholat Rawatib",
+            "target": "4 rakaat per hari",
+            "period": "day",
+            "target_count": 4,
+            "mode": "rawatib_count",
+            "rakaat_per_check": 2,
+            "detail": "",
+            "data_keys": [
+                "rawatib"
+            ]
+        },
+        {
+            "category": "SHOLAT SUNNAH",
+            "label": "Sholat Witir",
+            "target": "1 kali per hari",
+            "period": "day",
+            "target_count": 1,
+            "mode": "day_presence",
+            "detail": "",
+            "data_keys": [
+                "witir"
+            ]
+        }
+    ]
+}

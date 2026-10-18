@@ -195,7 +195,7 @@ document.addEventListener('DOMContentLoaded', function() {
         const activeDate = tanggalInput.value;
         const keys = [
             'subuh', 'dzuhur', 'ashar', 'maghrib', 'isya',
-            'dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh',
+            'dhuha', 'tahajud', 'witir', 'senin_kamis', 'ayamul_bidh',
             'sedekah', 'almatsurat_pagi', 'almatsurat_petang',
             'istighfar', 'tilawah', 'rawatib'
         ];

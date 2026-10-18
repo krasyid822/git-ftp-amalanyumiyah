@@ -1,9 +1,12 @@
 *.json
-# Konfigurasi target grup IKUT git (ini konfigurasi, bukan data user).
+# Konfigurasi target IKUT git (ini konfigurasi, bukan data user).
+# Berlaku untuk target_settings.json milik grup maupun milik halaman
+# analisis lintas grup (test/bi/target_settings.json).
 !target_settings.json
 .netrc
 *.log
 test/_manifest/
+test/_ai/
 
 # Kredensial admin: JANGAN ke GitHub. Ikut ke server FTP lewat .git-ftp-include.
 test/admin.json

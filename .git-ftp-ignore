@@ -23,6 +23,7 @@ hijri_cache.json
 *hijri_cache.json
 test/_manifest/*
 test/_manifest/.*
+test/_ai/
 
 # Kredensial
 .netrc

@@ -46,6 +46,11 @@ if (!in_array($requestPath, $allowedPaths, true)) {
 	exit;
 }
 
+// Mesin perhitungan aturan target (bi_read_json, bi_target_*, bi_count_tilawah_pages,
+// bi_load_target_settings*, dst) ada di file terpisah agar bisa dipakai bersama
+// halaman penginputan mentee (test/index.php).
+require_once __DIR__ . '/target_engine.php';
+
 function bi_h(mixed $value): string
 {
 	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
@@ -75,20 +80,6 @@ function bi_month_label(mixed $month): string
 	return ($bulan[$match[2]] ?? $match[2]) . ' ' . $match[1];
 }
 
-function bi_read_json(string $file): array
-{
-	if (!is_file($file)) {
-		return [];
-	}
-
-	$content = file_get_contents($file);
-	if ($content === false || trim($content) === '') {
-		return [];
-	}
-
-	$data = json_decode($content, true);
-	return is_array($data) ? $data : [];
-}
 
 function bi_available_months(array $data): array
 {
@@ -116,245 +107,6 @@ function bi_available_months(array $data): array
  * key detail akan membuat count jadi kecil dan ringkasan lama ("3/5")
  * terpotong jadi "2/2".
  */
-function bi_rawatib_detail_keys(): array
-{
-	return [
-		'rawatib_subuh_q',
-		'rawatib_dzuhur_q',
-		'rawatib_dzuhur_b',
-		'rawatib_maghrib_b',
-		'rawatib_isya_b',
-	];
-}
-
-function bi_rawatib_detail_count(array $data = []): int
-{
-	// Jumlah opsi rawatib itu tetap, tidak bergantung pada isi data.
-	$count = count(bi_rawatib_detail_keys());
-	return $count > 0 ? $count : 5;
-}
-
-function bi_is_filled_value(mixed $value): bool
-{
-	if (is_string($value)) {
-		return trim($value) !== '';
-	}
-
-	return !empty($value);
-}
-
-function bi_normalize_quran_key(string $value): string
-{
-	$value = strtolower(trim($value));
-	$value = preg_replace('/^(surah|surat|qs)\s+/iu', '', $value) ?? $value;
-	$value = str_replace(['’', '`', '´'], "'", $value);
-	$value = preg_replace('/[^a-z0-9]+/', '', $value);
-
-	return is_string($value) ? $value : '';
-}
-
-function bi_load_quran_reference_data(string $sourceDataset = ''): array
-{
-	static $cache = [];
-
-	$csvFile = __DIR__ . DIRECTORY_SEPARATOR . 'dataset_halaman_quran.csv';
-	if ($sourceDataset !== '') {
-		$sourceDataset = str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $sourceDataset);
-		$workspaceCandidate = dirname(__DIR__) . DIRECTORY_SEPARATOR . ltrim($sourceDataset, DIRECTORY_SEPARATOR);
-		$localCandidate = __DIR__ . DIRECTORY_SEPARATOR . basename($sourceDataset);
-		if (is_file($workspaceCandidate)) {
-			$csvFile = $workspaceCandidate;
-		} elseif (is_file($localCandidate)) {
-			$csvFile = $localCandidate;
-		}
-	}
-
-	$cacheKey = realpath($csvFile) ?: $csvFile;
-	if (isset($cache[$cacheKey])) {
-		return $cache[$cacheKey];
-	}
-
-	$reference = [
-		'names' => [],
-		'surah_order' => [],
-		'pages' => [],
-	];
-
-	if (!is_file($csvFile)) {
-		$cache[$cacheKey] = $reference;
-		return $reference;
-	}
-
-	$handle = fopen($csvFile, 'r');
-	if ($handle === false) {
-		$cache[$cacheKey] = $reference;
-		return $reference;
-	}
-
-	fgetcsv($handle);
-	while (($row = fgetcsv($handle)) !== false) {
-		$page = isset($row[0]) && is_numeric($row[0]) ? (int) $row[0] : 0;
-		$startName = trim((string) ($row[1] ?? ''));
-		$startAyah = isset($row[2]) && is_numeric($row[2]) ? (int) $row[2] : 0;
-		$endName = trim((string) ($row[3] ?? ''));
-		$endAyah = isset($row[4]) && is_numeric($row[4]) ? (int) $row[4] : 0;
-
-		if ($page <= 0 || $startName === '' || $endName === '' || $startAyah <= 0 || $endAyah <= 0) {
-			continue;
-		}
-
-		foreach ([$startName, $endName] as $surahName) {
-			$key = bi_normalize_quran_key($surahName);
-			if ($key === '') {
-				continue;
-			}
-
-			$reference['names'][$key] = $surahName;
-			if (!isset($reference['surah_order'][$key])) {
-				$reference['surah_order'][$key] = count($reference['surah_order']) + 1;
-			}
-		}
-
-		$startKey = bi_normalize_quran_key($startName);
-		$endKey = bi_normalize_quran_key($endName);
-		if ($startKey === '' || $endKey === '' || !isset($reference['surah_order'][$startKey], $reference['surah_order'][$endKey])) {
-			continue;
-		}
-
-		$reference['pages'][] = [
-			'page' => $page,
-			'start_order' => $reference['surah_order'][$startKey],
-			'start_ayah' => $startAyah,
-			'end_order' => $reference['surah_order'][$endKey],
-			'end_ayah' => $endAyah,
-		];
-	}
-
-	fclose($handle);
-
-	$cache[$cacheKey] = $reference;
-	return $reference;
-}
-
-function bi_match_quran_surah_name(string $name, string $sourceDataset = ''): string
-{
-	$name = trim(preg_replace('/\s+/u', ' ', $name) ?? $name);
-	if ($name === '') {
-		return '';
-	}
-
-	$reference = bi_load_quran_reference_data($sourceDataset);
-	$key = bi_normalize_quran_key($name);
-	if ($key === '' || empty($reference['names'])) {
-		return $name;
-	}
-
-	if (isset($reference['names'][$key])) {
-		return $reference['names'][$key];
-	}
-
-	$bestName = null;
-	$bestDistance = null;
-	foreach ($reference['names'] as $candidateKey => $candidateName) {
-		$distance = levenshtein($key, $candidateKey);
-		if ($bestDistance === null || $distance < $bestDistance) {
-			$bestDistance = $distance;
-			$bestName = $candidateName;
-		}
-	}
-
-	$limit = max(1, (int) floor(strlen($key) * 0.25));
-	return $bestName !== null && $bestDistance !== null && $bestDistance <= $limit ? $bestName : $name;
-}
-
-function bi_quran_point_compare(int $leftOrder, int $leftAyah, int $rightOrder, int $rightAyah): int
-{
-	if ($leftOrder === $rightOrder) {
-		return $leftAyah <=> $rightAyah;
-	}
-
-	return $leftOrder <=> $rightOrder;
-}
-
-function bi_count_quran_pages_for_range(string $surahName, int $startAyah, int $endAyah, string $sourceDataset = ''): ?array
-{
-	if ($startAyah <= 0 || $endAyah <= 0) {
-		return null;
-	}
-
-	if ($endAyah < $startAyah) {
-		[$startAyah, $endAyah] = [$endAyah, $startAyah];
-	}
-
-	$reference = bi_load_quran_reference_data($sourceDataset);
-	if (empty($reference['pages']) || empty($reference['surah_order'])) {
-		return null;
-	}
-
-	$matchedName = bi_match_quran_surah_name($surahName, $sourceDataset);
-	$surahKey = bi_normalize_quran_key($matchedName);
-	if ($surahKey === '' || !isset($reference['surah_order'][$surahKey])) {
-		return null;
-	}
-
-	$order = $reference['surah_order'][$surahKey];
-	$pages = [];
-	foreach ($reference['pages'] as $pageRange) {
-		$startsBeforeEnd = bi_quran_point_compare($pageRange['start_order'], $pageRange['start_ayah'], $order, $endAyah) <= 0;
-		$endsAfterStart = bi_quran_point_compare($order, $startAyah, $pageRange['end_order'], $pageRange['end_ayah']) <= 0;
-		if ($startsBeforeEnd && $endsAfterStart) {
-			$pages[$pageRange['page']] = true;
-		}
-	}
-
-	return $pages;
-}
-
-function bi_count_tilawah_pages(mixed $value, array $rule): ?int
-{
-	if (!is_string($value) || trim($value) === '') {
-		return 0;
-	}
-
-	$sourceDataset = is_string($rule['source_dataset'] ?? null) ? $rule['source_dataset'] : '';
-	$segments = preg_split('/\s*,\s*/u', trim($value));
-	if ($segments === false || $segments === []) {
-		$segments = [trim($value)];
-	}
-
-	$pages = [];
-	$hasAyahRange = false;
-	foreach ($segments as $segment) {
-		$segment = trim(preg_replace('/\s+/u', ' ', $segment) ?? $segment);
-		$segment = preg_replace('/\s*[:：]\s*/u', ' ', $segment) ?? $segment;
-		$segment = preg_replace('/\b(ayat|ayah)\b/iu', ' ', $segment) ?? $segment;
-		$segment = trim(preg_replace('/\s+/u', ' ', $segment) ?? $segment);
-		if ($segment === '') {
-			continue;
-		}
-
-		if (!preg_match('/^(.+?)\s+(\d+)(?:\s*[-–—]\s*(\d+))?$/u', $segment, $match)) {
-			continue;
-		}
-
-		$hasAyahRange = true;
-		$rangePages = bi_count_quran_pages_for_range($match[1], (int) $match[2], isset($match[3]) && $match[3] !== '' ? (int) $match[3] : (int) $match[2], $sourceDataset);
-		if ($rangePages === null) {
-			continue;
-		}
-
-		foreach ($rangePages as $page => $_) {
-			$pages[$page] = true;
-		}
-	}
-
-	if ($hasAyahRange) {
-		return count($pages);
-	}
-
-	$pagesPerSheet = isset($rule['pages_per_sheet']) && is_numeric($rule['pages_per_sheet']) ? max(1, (int) $rule['pages_per_sheet']) : 2;
-	return $pagesPerSheet;
-}
 
 function bi_format_person_name(string $name): string
 {
@@ -751,393 +503,6 @@ function bi_resolve_month(mixed $requestedMonth, array $availableMonths): string
 	return $availableMonths[0] ?? $currentMonth;
 }
 
-function bi_target_rule_keys(array $rule): array
-{
-	$rawKeys = $rule['data_keys'] ?? ($rule['keys'] ?? []);
-	if (!is_array($rawKeys)) {
-		return [];
-	}
-
-	$keys = [];
-	foreach ($rawKeys as $key) {
-		if (is_string($key) && trim($key) !== '') {
-			$keys[] = trim($key);
-		}
-	}
-
-	return $keys;
-}
-
-function bi_target_count(array $rule, float $default = 1): float
-{
-	$value = $rule['target_count'] ?? $default;
-	return is_numeric($value) ? max(0.0, (float) $value) : $default;
-}
-
-function bi_target_required_units(array $rule): float
-{
-	$mode = strtolower((string) ($rule['mode'] ?? 'day_presence'));
-	if ($mode === 'numeric') {
-		return 1.0;
-	}
-
-	return max(1.0, bi_target_count($rule, 1.0));
-}
-
-function bi_target_required_units_for_period(array $rule, array $days, float $baseRequiredUnits, string $period): float
-{
-	$period = strtolower(trim($period));
-	$mode = strtolower((string) ($rule['mode'] ?? 'day_presence'));
-
-	if ($period === 'week' && ($mode === 'day_presence' || $mode === 'quran_sheet_count' || isset($rule['pages_per_sheet']))) {
-		return max(1.0, min($baseRequiredUnits, (float) count($days)));
-	}
-
-	return $baseRequiredUnits;
-}
-
-function bi_target_periods(int $daysInMonth, string $period, string $selectedMonth = ''): array
-{
-	$period = strtolower(trim($period));
-	if ($period === 'month') {
-		return ['month' => range(1, $daysInMonth)];
-	}
-
-	$periods = [];
-	for ($day = 1; $day <= $daysInMonth; $day++) {
-		$key = (string) $day;
-		if ($period === 'week' && preg_match('/^\d{4}-\d{2}$/', $selectedMonth)) {
-			$timestamp = strtotime($selectedMonth . '-' . str_pad((string) $day, 2, '0', STR_PAD_LEFT));
-			$key = $timestamp === false ? (string) ceil($day / 7) : date('o-W', $timestamp);
-		}
-
-		if (!isset($periods[$key])) {
-			$periods[$key] = [];
-		}
-		$periods[$key][] = $day;
-	}
-
-	return $periods;
-}
-
-function bi_target_presence_units(array $monthData, array $rule, int $day): float
-{
-	$keys = bi_target_rule_keys($rule);
-	if (empty($keys)) {
-		return 0.0;
-	}
-
-	$logic = strtolower((string) ($rule['logic'] ?? 'all'));
-	$matches = [];
-	foreach ($keys as $key) {
-		$matches[] = bi_is_filled_value($monthData[$key][$day] ?? null);
-	}
-
-	if ($logic === 'any') {
-		return in_array(true, $matches, true) ? 1.0 : 0.0;
-	}
-
-	return !in_array(false, $matches, true) ? 1.0 : 0.0;
-}
-
-function bi_target_value_count_units(array $monthData, array $rule, int $day): float
-{
-	$keys = bi_target_rule_keys($rule);
-	$matchValue = is_scalar($rule['match_value'] ?? null) ? trim((string) $rule['match_value']) : '';
-	if ($matchValue === '') {
-		return 0.0;
-	}
-
-	$count = 0;
-	foreach ($keys as $key) {
-		$value = $monthData[$key][$day] ?? null;
-		if (is_scalar($value) && trim((string) $value) === $matchValue) {
-			$count++;
-		}
-	}
-
-	return (float) $count;
-}
-
-function bi_target_filled_key_count_units(array $monthData, array $rule, int $day): float
-{
-	$count = 0;
-	foreach (bi_target_rule_keys($rule) as $key) {
-		if (bi_is_filled_value($monthData[$key][$day] ?? null)) {
-			$count++;
-		}
-	}
-
-	return (float) $count;
-}
-
-function bi_target_rawatib_units(array $monthData, array $rule, int $day): float
-{
-	$rakaatPerCheck = isset($rule['rakaat_per_check']) && is_numeric($rule['rakaat_per_check']) ? max(1.0, (float) $rule['rakaat_per_check']) : 2.0;
-	$rawValue = $monthData['rawatib'][$day] ?? '';
-	if (is_string($rawValue) && preg_match('/^(\d+)\s*\/\s*(\d+)$/', trim($rawValue), $match)) {
-		return (float) ((int) $match[1]) * $rakaatPerCheck;
-	}
-
-	$done = 0;
-	foreach ($monthData as $key => $values) {
-		if (strpos((string) $key, 'rawatib_') !== 0 || !is_array($values)) {
-			continue;
-		}
-
-		if (bi_is_filled_value($values[$day] ?? null)) {
-			$done++;
-		}
-	}
-
-	return (float) $done * $rakaatPerCheck;
-}
-
-function bi_target_numeric_units(array $monthData, array $rule, int $day): float
-{
-	$keys = bi_target_rule_keys($rule);
-	$key = $keys[0] ?? '';
-	if ($key === '') {
-		return 0.0;
-	}
-
-	$value = $monthData[$key][$day] ?? null;
-	$threshold = isset($rule['threshold']) && is_numeric($rule['threshold']) ? (float) $rule['threshold'] : bi_target_count($rule, 1.0);
-
-	return is_numeric($value) && (float) $value >= $threshold ? 1.0 : 0.0;
-}
-
-function bi_target_quran_sheet_units(array $monthData, array $rule, int $day): float
-{
-	$keys = bi_target_rule_keys($rule);
-	$key = $keys[0] ?? 'tilawah';
-	$value = $monthData[$key][$day] ?? '';
-	$pages = bi_count_tilawah_pages($value, $rule);
-	if ($pages === null || $pages <= 0) {
-		return 0.0;
-	}
-
-	$pagesPerSheet = isset($rule['pages_per_sheet']) && is_numeric($rule['pages_per_sheet']) ? max(1.0, (float) $rule['pages_per_sheet']) : 2.0;
-	return $pages / $pagesPerSheet;
-}
-
-function bi_target_rule_units_for_day(array $monthData, array $rule, int $day): float
-{
-	$mode = strtolower((string) ($rule['mode'] ?? 'day_presence'));
-
-	if ($mode === 'value_count') {
-		return bi_target_value_count_units($monthData, $rule, $day);
-	}
-
-	if ($mode === 'filled_key_count') {
-		return bi_target_filled_key_count_units($monthData, $rule, $day);
-	}
-
-	if ($mode === 'rawatib_count') {
-		return bi_target_rawatib_units($monthData, $rule, $day);
-	}
-
-	if ($mode === 'numeric') {
-		return bi_target_numeric_units($monthData, $rule, $day);
-	}
-
-	if ($mode === 'quran_sheet_count' || isset($rule['pages_per_sheet'])) {
-		return bi_target_quran_sheet_units($monthData, $rule, $day);
-	}
-
-	return bi_target_presence_units($monthData, $rule, $day);
-}
-
-function bi_target_rule_matches_day(array $monthData, array $rule, int $day): bool
-{
-	return bi_target_rule_units_for_day($monthData, $rule, $day) >= bi_target_required_units($rule);
-}
-
-function bi_compute_target_rule_progress(array $monthData, int $daysInMonth, array $rule, string $selectedMonth = ''): array
-{
-	$requiredUnits = bi_target_required_units($rule);
-	$period = is_string($rule['period'] ?? null) ? $rule['period'] : 'day';
-	$periods = bi_target_periods($daysInMonth, $period, $selectedMonth);
-	$done = 0.0;
-	$possible = 0.0;
-	$periodsDone = 0;
-
-	foreach ($periods as $days) {
-		$periodRequiredUnits = bi_target_required_units_for_period($rule, $days, $requiredUnits, $period);
-		$periodUnits = 0.0;
-		foreach ($days as $day) {
-			$periodUnits += bi_target_rule_units_for_day($monthData, $rule, $day);
-		}
-
-		$done += min($periodUnits, $periodRequiredUnits);
-		$possible += $periodRequiredUnits;
-		if ($periodUnits >= $periodRequiredUnits) {
-			$periodsDone++;
-		}
-	}
-
-	return [
-		'done' => $done,
-		'possible' => $possible,
-		'percent' => $possible > 0 ? round(($done / $possible) * 100, 1) : 0,
-		'periods_done' => $periodsDone,
-		'periods_possible' => count($periods),
-	];
-}
-
-function bi_compute_target_summary(array $monthData, int $daysInMonth, array $targetRules, string $selectedMonth = ''): array
-{
-	$summary = [
-		'rules_count' => 0,
-		'done' => 0.0,
-		'possible' => 0.0,
-		'percent' => 0,
-		'overall_percent' => 0,
-		'best_rule' => null,
-		'rules' => [],
-	];
-
-	foreach ($targetRules as $rule) {
-		if (!is_array($rule)) {
-			continue;
-		}
-
-		$summary['rules_count']++;
-		$progress = bi_compute_target_rule_progress($monthData, $daysInMonth, $rule, $selectedMonth);
-		$ruleDone = $progress['done'];
-		$rulePossible = $progress['possible'];
-		$rulePercent = $progress['percent'];
-		$ruleLabel = is_string($rule['label'] ?? null) && trim($rule['label']) !== '' ? trim($rule['label']) : (string) ($rule['category'] ?? 'Target');
-
-		$summary['rules'][] = [
-			'category' => $rule['category'] ?? '',
-			'label' => $ruleLabel,
-			'percent' => $rulePercent,
-			'done' => $ruleDone,
-			'possible' => $rulePossible,
-			'periods_done' => $progress['periods_done'],
-			'periods_possible' => $progress['periods_possible'],
-		];
-		$summary['done'] += $ruleDone;
-		$summary['possible'] += $rulePossible;
-
-		if ($summary['best_rule'] === null || $rulePercent > $summary['best_rule']['percent']) {
-			$summary['best_rule'] = [
-				'label' => $ruleLabel,
-				'percent' => $rulePercent,
-			];
-		}
-	}
-
-	$summary['overall_percent'] = $summary['possible'] > 0 ? round(($summary['done'] / $summary['possible']) * 100, 1) : 0;
-	$summary['percent'] = $summary['overall_percent'];
-
-	return $summary;
-}
-
-function bi_compute_target_category_summary(array $rawParticipants, string $selectedMonth, int $daysInMonth, array $targetRules): array
-{
-	$summary = [];
-
-	foreach ($targetRules as $rule) {
-		if (!is_array($rule)) {
-			continue;
-		}
-
-		$category = is_string($rule['category'] ?? null) && trim($rule['category']) !== '' ? trim($rule['category']) : 'Target';
-		if (!isset($summary[$category])) {
-			$summary[$category] = [
-				'done' => 0,
-				'possible' => 0,
-				'percent' => 0,
-			];
-		}
-
-		foreach ($rawParticipants as $participant) {
-			$monthData = $participant['data'][$selectedMonth] ?? [];
-			if (!is_array($monthData)) {
-				$monthData = [];
-			}
-
-			$progress = bi_compute_target_rule_progress($monthData, $daysInMonth, $rule, $selectedMonth);
-			$summary[$category]['done'] += $progress['done'];
-			$summary[$category]['possible'] += $progress['possible'];
-		}
-	}
-
-	foreach ($summary as $category => $stats) {
-		$summary[$category]['percent'] = $stats['possible'] > 0 ? round(($stats['done'] / $stats['possible']) * 100, 1) : 0;
-	}
-
-	return $summary;
-}
-
-function bi_compute_target_rule_summaries(array $rawParticipants, string $selectedMonth, int $daysInMonth, array $targetRules): array
-{
-	$summaries = [];
-
-	foreach ($targetRules as $index => $rule) {
-		if (!is_array($rule)) {
-			continue;
-		}
-
-		$ruleLabel = is_string($rule['label'] ?? null) && trim($rule['label']) !== '' ? trim($rule['label']) : (string) ($rule['category'] ?? 'Target');
-		$summary = [
-			'category' => $rule['category'] ?? '',
-			'label' => $ruleLabel,
-			'target' => $rule['target'] ?? '',
-			'done' => 0.0,
-			'possible' => 0.0,
-			'percent' => 0,
-			'periods_done' => 0,
-			'periods_possible' => 0,
-			'order' => $index,
-		];
-
-		foreach ($rawParticipants as $participant) {
-			$monthData = $participant['data'][$selectedMonth] ?? [];
-			if (!is_array($monthData)) {
-				$monthData = [];
-			}
-
-			$progress = bi_compute_target_rule_progress($monthData, $daysInMonth, $rule, $selectedMonth);
-			$summary['done'] += $progress['done'];
-			$summary['possible'] += $progress['possible'];
-			$summary['periods_done'] += $progress['periods_done'];
-			$summary['periods_possible'] += $progress['periods_possible'];
-		}
-
-		$summary['percent'] = $summary['possible'] > 0 ? round(($summary['done'] / $summary['possible']) * 100, 1) : 0;
-		$summaries[] = $summary;
-	}
-
-	return $summaries;
-}
-
-function bi_format_target_number(mixed $value): string
-{
-	if (!is_numeric($value)) {
-		return '0';
-	}
-
-	$number = (float) $value;
-	if (abs($number - round($number)) < 0.001) {
-		return number_format((float) round($number), 0, ',', '.');
-	}
-
-	return number_format($number, 1, ',', '.');
-}
-
-function bi_load_target_settings(string $analysisRoot): array
-{
-	$targetFile = $analysisRoot . DIRECTORY_SEPARATOR . 'target_settings.json';
-	if (!is_file($targetFile)) {
-		return [];
-	}
-
-	$targetSettings = bi_read_json($targetFile);
-	return is_array($targetSettings) ? $targetSettings : [];
-}
 
 $daftar_amalan = [
 	'SHOLAT WAJIB' => [
@@ -1199,7 +564,18 @@ if (!in_array($selectedMonth, $availableMonths, true)) {
 $daysInMonth = (int) date('t', strtotime($selectedMonth . '-01'));
 $analysisLabel = $isMenteeFocus ? ($focusedParticipant['full_label'] ?? $focusedParticipant['label'] ?? 'MENTEE') : ($analysisScope === 'all' ? 'SEMUA KELOMPOK' : $namaPengguna);
 
-$targetSettings = bi_load_target_settings($analysisRoot);
+/*
+ * Aturan target:
+ *   - mode grup          -> <folder grup>/target_settings.json
+ *   - mode semua kelompok -> test/bi/target_settings.json
+ * Berkas lintas grup itu bernama sama (target_settings.json) tapi diletakkan
+ * di folder halaman analisisnya sendiri. Jadi aturan target khusus lintas
+ * grup berdiri sendiri, tidak memakai target_settings.json milik grup mana pun.
+ */
+$crossGroupTargetFile = __DIR__ . DIRECTORY_SEPARATOR . 'bi' . DIRECTORY_SEPARATOR . 'target_settings.json';
+$targetSettings = $analysisScope === 'all'
+	? bi_load_target_settings_file($crossGroupTargetFile)
+	: bi_load_target_settings($analysisRoot);
 $targetRules = [];
 if (isset($targetSettings['rules']) && is_array($targetSettings['rules'])) {
 	foreach ($targetSettings['rules'] as $rule) {
@@ -1362,6 +738,39 @@ foreach ($targetRuleSummaries as $ruleSummary) {
 }
 
 /*
+ * Data grafik untuk halaman analisis. Diserialisasi ke JSON lalu dipakai
+ * oleh skrip kecil di bagian bawah halaman untuk menggambar model tampilan
+ * (batang, garis, donat, radar, peta panas). Struktur tiap butir:
+ *   label, sub, percent, done, possible, target, color
+ */
+$biCategoryChart = [];
+foreach ($categoryTotals as $categoryName => $stats) {
+	$targetPercent = $targetCategorySummary[$categoryName]['percent'] ?? null;
+	$biCategoryChart[] = [
+		'label'    => (string) $categoryName,
+		'sub'      => number_format((float) $stats['done'], 0, ',', '.') . '/' . number_format((float) $stats['possible'], 0, ',', '.'),
+		'percent'  => round((float) $stats['percent'], 1),
+		'done'     => round((float) $stats['done'], 2),
+		'possible' => round((float) $stats['possible'], 2),
+		'target'   => $targetPercent === null ? null : round((float) $targetPercent, 1),
+		'color'    => $categoryColors[$categoryName] ?? '#7df0c5',
+	];
+}
+
+$biRuleChart = [];
+foreach ($targetRuleSummaries as $index => $ruleSummary) {
+	$biRuleChart[] = [
+		'label'    => (string) ($ruleSummary['label'] ?? 'Target'),
+		'sub'      => (string) ($ruleSummary['category'] ?? ''),
+		'percent'  => round((float) ($ruleSummary['percent'] ?? 0), 1),
+		'done'     => round((float) ($ruleSummary['done'] ?? 0), 2),
+		'possible' => round((float) ($ruleSummary['possible'] ?? 0), 2),
+		'target'   => null,
+		'color'    => $categoryColors[$ruleSummary['category'] ?? ''] ?? $groupPalette[$index % count($groupPalette)],
+	];
+}
+
+/*
  * Keep the generic category insight available as a fallback when a group does
  * not have target_settings.json yet.
  */
@@ -1370,6 +779,34 @@ $groupCount = count($groupSummaries);
 $skippedCount = count($skippedFolders);
 $analysisModeLabel = $analysisScope === 'all' ? 'Lintas Grup' : 'Kelompok';
 $analysisContextLabel = $analysisScope === 'all' ? 'seluruh kelompok di workspace ini' : basename($analysisRoot);
+
+/*
+ * Sumber data sesungguhnya berbeda dari $analysisRoot saat mode lintas grup:
+ * pemindaian memakai $scanRoot (akar workspace), sedangkan $analysisRoot hanya
+ * menunjuk folder pemanggil (mis. test/). Label di bawah dibuat eksplisit agar
+ * tidak lagi tertulis "folder test".
+ */
+$dataSourceLabel = 'folder ' . basename($analysisRoot);
+$targetSettingsLabel = basename($analysisRoot) . '/target_settings.json';
+if ($analysisScope === 'all') {
+	$dataSourceLabel = 'seluruh kelompok mentoring di workspace ini';
+	$targetSettingsLabel = 'bi/target_settings.json (target khusus lintas grup)';
+	if (!empty($groupSummaries)) {
+		$groupLabelList = [];
+		foreach ($groupSummaries as $groupSummary) {
+			$groupLabel = (string) ($groupSummary['label'] ?? $groupSummary['group'] ?? '');
+			if ($groupLabel !== '') {
+				$groupLabelList[] = $groupLabel;
+			}
+		}
+		if (!empty($groupLabelList)) {
+			$totalGroups = count($groupLabelList);
+			$shownGroups = array_slice($groupLabelList, 0, 6);
+			$groupLabelList = implode(', ', $shownGroups) . ($totalGroups > count($shownGroups) ? ', …' : '');
+			$dataSourceLabel = $totalGroups . ' kelompok (' . $groupLabelList . ')';
+		}
+	}
+}
 $resetFocusParams = ['month' => $selectedMonth];
 if ($analysisScope === 'all') {
 	$resetFocusParams['scope'] = 'all';
@@ -2719,6 +2156,205 @@ foreach ($categoryTotals as $categoryName => $stats) {
 				min-width: 0;
 			}
 		}
+
+		/* --- Model tampilan grafik analisis --- */
+		.bi-chart-bar {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			flex-wrap: wrap;
+			margin: 4px 0 14px;
+		}
+		.bi-chart-hint {
+			font-size: 0.72rem;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+			color: var(--muted);
+		}
+		.bi-chart-tabs {
+			display: inline-flex;
+			flex-wrap: wrap;
+			gap: 4px;
+			padding: 4px;
+			border: 1px solid var(--line-strong);
+			border-radius: 999px;
+			background: var(--surface-strong);
+		}
+		.bi-chart-tabs button {
+			appearance: none;
+			border: 1px solid transparent;
+			background: transparent;
+			color: var(--muted);
+			font: inherit;
+			font-size: 0.78rem;
+			font-weight: 600;
+			padding: 6px 13px;
+			border-radius: 999px;
+			cursor: pointer;
+			line-height: 1.2;
+			transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+		}
+		.bi-chart-tabs button:hover {
+			color: var(--text);
+			background: var(--md-sys-color-surface-container-high);
+		}
+		.bi-chart-tabs button.on {
+			background: var(--md-sys-color-secondary-container);
+			color: var(--md-sys-color-on-secondary-container);
+			font-weight: 800;
+		}
+		.bi-chart-tabs button:focus-visible {
+			outline: 2px solid var(--accent);
+			outline-offset: 2px;
+		}
+		.bi-chart-stage {
+			margin-bottom: 6px;
+		}
+		.bi-svg {
+			display: block;
+			width: 100%;
+			height: auto;
+		}
+		.bi-grid-line {
+			stroke: var(--line);
+			stroke-width: 1;
+		}
+		.bi-axis-text {
+			fill: var(--muted);
+			font-size: 11px;
+		}
+		.bi-bar-rect {
+			transition: opacity 0.15s ease;
+		}
+		.bi-bar-rect:hover {
+			opacity: 0.82;
+		}
+		.bi-value-text {
+			fill: var(--text);
+			font-size: 11px;
+			font-weight: 700;
+		}
+		.bi-target-line,
+		.bi-target-tick {
+			stroke: var(--accent2);
+			stroke-width: 2;
+			stroke-dasharray: 5 4;
+			fill: none;
+		}
+		.bi-line-path {
+			fill: none;
+			stroke: var(--accent);
+			stroke-width: 2.5;
+			stroke-linejoin: round;
+			stroke-linecap: round;
+		}
+		.bi-line-dot {
+			fill: var(--accent);
+		}
+		.bi-area-path {
+			fill: var(--md-sys-color-primary-container);
+			fill-opacity: 0.45;
+			stroke: none;
+		}
+		.bi-donut-track {
+			stroke: var(--line);
+		}
+		.bi-radar-target {
+			fill: var(--md-sys-color-tertiary-container);
+			fill-opacity: 0.35;
+			stroke: var(--accent2);
+			stroke-width: 2;
+			stroke-dasharray: 5 4;
+		}
+		.bi-radar-area {
+			fill: var(--md-sys-color-primary-container);
+			fill-opacity: 0.45;
+			stroke: var(--accent);
+			stroke-width: 2.5;
+		}
+		.bi-legend {
+			display: flex;
+			flex-wrap: wrap;
+			gap: 8px 16px;
+			margin-top: 12px;
+		}
+		.bi-legend-item {
+			display: inline-flex;
+			align-items: center;
+			gap: 7px;
+			font-size: 0.78rem;
+			color: var(--muted);
+		}
+		.bi-legend-dot {
+			width: 11px;
+			height: 11px;
+			border-radius: 3px;
+			flex: none;
+		}
+		.bi-legend-strong {
+			color: var(--text);
+			font-weight: 700;
+		}
+		.bi-heat-legend {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			margin: 0 0 12px;
+			font-size: 0.72rem;
+			color: var(--muted);
+		}
+		.bi-heat-scale {
+			flex: 1;
+			height: 12px;
+			border-radius: 999px;
+			border: 1px solid var(--line);
+			background: linear-gradient(90deg, hsl(8, 62%, 13%), hsl(44, 62%, 22%), hsl(80, 62%, 27%), hsl(116, 62%, 31%), hsl(153, 62%, 37%));
+		}
+		.bi-heat {
+			display: grid;
+			grid-template-columns: repeat(auto-fill, minmax(102px, 1fr));
+			gap: 6px;
+		}
+		.bi-heat-cell {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			text-align: center;
+			border-radius: 7px;
+			padding: 10px 7px;
+			min-height: 86px;
+			color: #eafff6;
+			min-width: 0;
+			text-shadow: 0 1px 2px rgba(0, 0, 0, 0.45);
+		}
+		.bi-heat-value {
+			font-size: 1.25rem;
+			font-weight: 800;
+			line-height: 1.05;
+		}
+		.bi-heat-label {
+			font-size: 0.64rem;
+			letter-spacing: 0.04em;
+			text-transform: uppercase;
+			opacity: 0.92;
+			margin-top: 4px;
+			max-width: 100%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.bi-chart-empty {
+			color: var(--muted);
+			font-size: 0.85rem;
+			padding: 10px 0;
+		}
+		@media (max-width: 620px) {
+			.bi-chart-tabs button {
+				padding: 6px 10px;
+				font-size: 0.74rem;
+			}
+		}
 	</style>
 </head>
 <body>
@@ -3055,6 +2691,20 @@ foreach ($categoryTotals as $categoryName => $stats) {
 				<span class="tag"><?= bi_h(number_format($displayAverageScore, 1, ',', '.')) ?>% <?= $hasTargetRules ? 'rata-rata target' : 'rata-rata kelompok' ?></span>
 			</div>
 
+			<div class="bi-chart" data-bi-chart="categories" data-bi-data="bi-data-categories">
+				<div class="bi-chart-bar">
+					<span class="bi-chart-hint">Model tampilan</span>
+					<div class="bi-chart-tabs" role="tablist" aria-label="Model tampilan grafik kategori">
+						<button type="button" data-bi-model="cards" class="on">Kartu</button>
+						<button type="button" data-bi-model="bar">Batang</button>
+						<button type="button" data-bi-model="line">Garis</button>
+						<button type="button" data-bi-model="donut">Donat</button>
+						<button type="button" data-bi-model="radar">Radar</button>
+						<button type="button" data-bi-model="heatmap">Peta Panas</button>
+					</div>
+				</div>
+				<div class="bi-chart-stage" hidden></div>
+				<div class="bi-chart-cards">
 			<div class="mini-grid">
 				<?php foreach ($categoryTotals as $categoryName => $stats) : ?>
 					<article class="mini-card" style="--accent: <?= bi_h($categoryColors[$categoryName] ?? '#7df0c5') ?>;">
@@ -3073,9 +2723,11 @@ foreach ($categoryTotals as $categoryName => $stats) {
 					</article>
 				<?php endforeach; ?>
 			</div>
+				</div>
+			</div>
 
 			<div class="footer-note">
-				Data diambil dari folder <?= bi_h(basename($analysisRoot)) ?>.
+				Data diambil dari <?= bi_h($dataSourceLabel) ?>.
 			</div>
 		</section>
 
@@ -3085,11 +2737,25 @@ foreach ($categoryTotals as $categoryName => $stats) {
 					<div>
 						<div class="section-label">Target</div>
 						<h2>Rincian Capaian Target</h2>
-						<p>Setiap kartu mengikuti aturan di <?= bi_h(basename($analysisRoot)) ?>/target_settings.json, termasuk target harian, mingguan, dan bulanan.</p>
+						<p>Setiap kartu mengikuti aturan di <?= bi_h($targetSettingsLabel) ?>, termasuk target harian, mingguan, dan bulanan.</p>
 					</div>
 					<span class="tag"><?= bi_h(count($targetRuleSummaries)) ?> target aktif</span>
 				</div>
 
+				<div class="bi-chart" data-bi-chart="rules" data-bi-data="bi-data-rules">
+					<div class="bi-chart-bar">
+						<span class="bi-chart-hint">Model tampilan</span>
+						<div class="bi-chart-tabs" role="tablist" aria-label="Model tampilan grafik target">
+							<button type="button" data-bi-model="cards" class="on">Kartu</button>
+							<button type="button" data-bi-model="bar">Batang</button>
+							<button type="button" data-bi-model="line">Garis</button>
+							<button type="button" data-bi-model="donut">Donat</button>
+							<button type="button" data-bi-model="radar">Radar</button>
+							<button type="button" data-bi-model="heatmap">Peta Panas</button>
+						</div>
+					</div>
+					<div class="bi-chart-stage" hidden></div>
+					<div class="bi-chart-cards">
 				<div class="mini-grid">
 					<?php foreach ($targetRuleSummaries as $index => $ruleSummary) : ?>
 						<article class="mini-card" style="--accent: <?= bi_h($categoryColors[$ruleSummary['category']] ?? $groupPalette[$index % count($groupPalette)]) ?>;">
@@ -3108,8 +2774,655 @@ foreach ($categoryTotals as $categoryName => $stats) {
 						</article>
 					<?php endforeach; ?>
 				</div>
+					</div>
+				</div>
 			</section>
 		<?php endif; ?>
 	</div>
+	<script type="application/json" id="bi-data-categories"><?= json_encode($biCategoryChart, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?></script>
+	<?php if (!empty($biRuleChart)) : ?>
+	<script type="application/json" id="bi-data-rules"><?= json_encode($biRuleChart, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) ?></script>
+	<?php endif; ?>
+	<script>
+	/*
+	 * Pengganti model tampilan grafik pada halaman analisis. Data diambil dari
+	 * <script type="application/json" data di atas, lalu digambar ulang sebagai
+	 * batang / garis / donat / radar / peta panas. Pilihan terakhir disimpan di
+	 * localStorage supaya tetap sama saat halaman dibuka lagi.
+	 */
+	(function () {
+		'use strict';
+
+		var NS = 'http://www.w3.org/2000/svg';
+		var PALETTE = ['#7df0c5', '#8bc5ff', '#ffd27d', '#ff9f7d', '#9ee7d8', '#f6d97a'];
+		var GRID = { w: 760, h: 300, left: 46, right: 16, top: 22, bottom: 72 };
+
+		function clampPercent(value) {
+			var n = Number(value);
+			if (!isFinite(n)) return 0;
+			return Math.max(0, Math.min(100, n));
+		}
+
+		function num(value) {
+			var n = Number(value);
+			return isFinite(n) ? n : 0;
+		}
+
+		function svgNode(tag, attrs) {
+			var node = document.createElementNS(NS, tag);
+			if (attrs) {
+				for (var key in attrs) {
+					if (Object.prototype.hasOwnProperty.call(attrs, key)) {
+						node.setAttribute(key, attrs[key]);
+					}
+				}
+			}
+			return node;
+		}
+
+		function htmlNode(tag, className, text) {
+			var node = document.createElement(tag);
+			if (className) node.className = className;
+			if (text != null) node.textContent = text;
+			return node;
+		}
+
+		function truncate(text, max) {
+			text = String(text == null ? '' : text).trim();
+			if (text.length <= max) return text;
+			return text.slice(0, max - 1).replace(/\s+\S*$/, '') + '\u2026';
+		}
+
+		function wrapLabel(text, max) {
+			text = String(text == null ? '' : text).trim();
+			if (text.length <= max) return [text];
+			var words = text.split(/\s+/);
+			var lines = [];
+			var current = '';
+			for (var i = 0; i < words.length && lines.length < 2; i++) {
+				var candidate = (current ? current + ' ' : '') + words[i];
+				if (candidate.length <= max || !current) {
+					current = candidate;
+				} else {
+					lines.push(current);
+					current = words[i];
+				}
+			}
+			if (current && lines.length < 2) lines.push(current);
+			if (!lines.length) lines = [truncate(text, max)];
+			return lines.slice(0, 2).map(function (line) { return truncate(line, max); });
+		}
+
+		/*
+		 * Lebar teks diukur sungguhan lewat canvas (bukan perkiraan jumlah huruf)
+		 * supaya tata letak label bisa menyesuaikan diri: ruang yang dibutuhkan
+		 * dihitung dulu, baru ukuran diagram ditentukan.
+		 */
+		var measureCtx = null;
+		var AXIS_FONT = '11px "Roboto Flex", -apple-system, "Segoe UI", system-ui, sans-serif';
+
+		function textWidth(text, font) {
+			var str = String(text == null ? '' : text);
+			if (!measureCtx && typeof document !== 'undefined') {
+				var canvas = document.createElement('canvas');
+				measureCtx = canvas.getContext ? canvas.getContext('2d') : null;
+			}
+			if (measureCtx) {
+				measureCtx.font = font || AXIS_FONT;
+				return measureCtx.measureText(str).width;
+			}
+			return str.length * 6.3;
+		}
+
+		/* Pangkas teks agar lebarnya tidak melebihi maxWidth (piksel). */
+		function fitText(text, maxWidth, font) {
+			var str = String(text == null ? '' : text).trim();
+			if (maxWidth <= 0) return '';
+			if (textWidth(str, font) <= maxWidth) return str;
+			var ellipsis = '\u2026';
+			var lo = 0;
+			var hi = str.length;
+			while (lo < hi) {
+				var mid = Math.ceil((lo + hi) / 2);
+				if (textWidth(str.slice(0, mid) + ellipsis, font) <= maxWidth) lo = mid;
+				else hi = mid - 1;
+			}
+			if (lo <= 0) return ellipsis;
+			return str.slice(0, lo).replace(/\s+\S*$/, '') + ellipsis;
+		}
+
+		function polar(cx, cy, radius, angle) {
+			return [cx + radius * Math.cos(angle), cy + radius * Math.sin(angle)];
+		}
+
+		function arcPath(cx, cy, outer, inner, start, span) {
+			if (span <= 0) return '';
+			if (span >= Math.PI * 2) span = Math.PI * 2 - 0.0001;
+			var large = span > Math.PI ? 1 : 0;
+			var a = polar(cx, cy, outer, start);
+			var b = polar(cx, cy, outer, start + span);
+			var c = polar(cx, cy, inner, start + span);
+			var d = polar(cx, cy, inner, start);
+			return 'M ' + a[0] + ' ' + a[1] +
+				' A ' + outer + ' ' + outer + ' 0 ' + large + ' 1 ' + b[0] + ' ' + b[1] +
+				' L ' + c[0] + ' ' + c[1] +
+				' A ' + inner + ' ' + inner + ' 0 ' + large + ' 0 ' + d[0] + ' ' + d[1] + ' Z';
+		}
+
+		function colorOf(item, index) {
+			return item.color || PALETTE[index % PALETTE.length];
+		}
+
+		function valueToY(percent) {
+			var inner = GRID.h - GRID.top - GRID.bottom;
+			return GRID.top + inner * (1 - clampPercent(percent) / 100);
+		}
+
+		function chartFrame() {
+			var svg = svgNode('svg', {
+				viewBox: '0 0 ' + GRID.w + ' ' + GRID.h,
+				class: 'bi-svg',
+				preserveAspectRatio: 'xMidYMid meet',
+				role: 'img'
+			});
+			for (var p = 0; p <= 100; p += 25) {
+				var y = valueToY(p);
+				svg.appendChild(svgNode('line', {
+					x1: GRID.left, y1: y, x2: GRID.w - GRID.right, y2: y, class: 'bi-grid-line'
+				}));
+				var label = svgNode('text', {
+					x: GRID.left - 8, y: y + 4, class: 'bi-axis-text', 'text-anchor': 'end'
+				});
+				label.textContent = p + '%';
+				svg.appendChild(label);
+			}
+			return svg;
+		}
+
+		function appendBottomLabels(svg, items, centerX, maxChars) {
+			items.forEach(function (item, index) {
+				wrapLabel(item.label, maxChars).forEach(function (line, lineIndex) {
+					var text = svgNode('text', {
+						x: centerX(index),
+						y: GRID.h - GRID.bottom + 18 + lineIndex * 13,
+						class: 'bi-axis-text',
+						'text-anchor': 'middle'
+					});
+					text.textContent = line;
+					svg.appendChild(text);
+				});
+			});
+		}
+
+		function renderBar(items) {
+			var svg = chartFrame();
+			var inner = GRID.w - GRID.left - GRID.right;
+			var slot = inner / Math.max(1, items.length);
+			var width = Math.max(6, Math.min(64, slot * 0.62));
+
+			items.forEach(function (item, index) {
+				var value = clampPercent(item.percent);
+				var x = GRID.left + slot * index + (slot - width) / 2;
+				var y = valueToY(value);
+				var rect = svgNode('rect', {
+					x: x, y: y, width: width, height: (GRID.h - GRID.bottom) - y,
+					rx: 6, fill: colorOf(item, index), class: 'bi-bar-rect'
+				});
+				var title = svgNode('title');
+				title.textContent = item.label + ': ' + value.toFixed(1) + '%';
+				rect.appendChild(title);
+				svg.appendChild(rect);
+
+				var valueText = svgNode('text', {
+					x: x + width / 2, y: Math.max(GRID.top + 10, y - 6),
+					class: 'bi-value-text', 'text-anchor': 'middle'
+				});
+				valueText.textContent = value.toFixed(1) + '%';
+				svg.appendChild(valueText);
+
+				if (item.target != null && isFinite(Number(item.target))) {
+					var ty = valueToY(item.target);
+					svg.appendChild(svgNode('line', {
+						x1: x - 4, y1: ty, x2: x + width + 4, y2: ty, class: 'bi-target-tick'
+					}));
+				}
+			});
+
+			appendBottomLabels(svg, items, function (index) {
+				return GRID.left + slot * index + slot / 2;
+			}, Math.max(8, Math.floor(slot / 6.2)));
+			return svg;
+		}
+
+		function renderLine(items) {
+			var svg = chartFrame();
+			var inner = GRID.w - GRID.left - GRID.right;
+			var step = items.length > 1 ? inner / (items.length - 1) : 0;
+			var xOf = function (index) {
+				return items.length > 1 ? GRID.left + step * index : GRID.left + inner / 2;
+			};
+			var points = items.map(function (item, index) {
+				return [xOf(index), valueToY(item.percent)];
+			});
+
+			if (points.length > 1) {
+				var area = 'M ' + points[0][0] + ' ' + (GRID.h - GRID.bottom);
+				points.forEach(function (point) { area += ' L ' + point[0] + ' ' + point[1]; });
+				area += ' L ' + points[points.length - 1][0] + ' ' + (GRID.h - GRID.bottom) + ' Z';
+				svg.appendChild(svgNode('path', { d: area, class: 'bi-area-path' }));
+
+				var targets = items.map(function (item, index) {
+					return (item.target != null && isFinite(Number(item.target)))
+						? [xOf(index), valueToY(item.target)]
+						: null;
+				}).filter(Boolean);
+				if (targets.length > 1) {
+					svg.appendChild(svgNode('path', {
+						d: targets.map(function (point, index) {
+							return (index ? 'L ' : 'M ') + point[0] + ' ' + point[1];
+						}).join(' '),
+						class: 'bi-target-line'
+					}));
+				}
+
+				svg.appendChild(svgNode('path', {
+					d: points.map(function (point, index) {
+						return (index ? 'L ' : 'M ') + point[0] + ' ' + point[1];
+					}).join(' '),
+					class: 'bi-line-path'
+				}));
+			}
+
+			points.forEach(function (point, index) {
+				svg.appendChild(svgNode('circle', {
+					cx: point[0], cy: point[1], r: 4.5,
+					fill: colorOf(items[index], index), class: 'bi-line-dot'
+				}));
+				var valueText = svgNode('text', {
+					x: point[0], y: Math.max(GRID.top + 10, point[1] - 10),
+					class: 'bi-value-text', 'text-anchor': 'middle'
+				});
+				valueText.textContent = clampPercent(items[index].percent).toFixed(1) + '%';
+				svg.appendChild(valueText);
+			});
+
+			appendBottomLabels(svg, items, xOf, 11);
+			return svg;
+		}
+
+		function renderDonut(items) {
+			var viewW = 420;
+			var rowH = 26;
+			var padTop = 16;
+			var padRight = 8;
+			var viewH = Math.max(300, items.length * rowH + padTop * 2);
+			var cy = viewH / 2;
+
+			// Lebar kolom angka di kanan (mis. "100.0%").
+			var valueW = 40;
+			items.forEach(function (item) {
+				valueW = Math.max(valueW, textWidth(clampPercent(item.percent).toFixed(1) + '%'));
+			});
+
+			// Label terpanjang menentukan berapa lebar ruang yang dibutuhkan.
+			var longest = 0;
+			items.forEach(function (item) {
+				longest = Math.max(longest, textWidth(item.label));
+			});
+
+			var swatchW = 12;
+			var swatchGap = 6;
+			var valueGap = 10;
+			var gap = 16;          // jarak tepi donat ke kolom legenda
+			var baseOuter = 118;
+			var minOuter = 84;
+
+			// Tata letak untuk satu ukuran donat: makin kecil donat, makin lebar
+			// ruang yang tersisa untuk label (donat digeser agar tetap seimbang).
+			function layout(outer) {
+				var cx = 150 - (baseOuter - outer) / 2;
+				var legendX = cx + outer + gap;
+				var nameX = legendX + swatchW + swatchGap;
+				var nameMax = (viewW - padRight - valueW - valueGap) - nameX;
+				return {
+					cx: cx,
+					outer: outer,
+					inner: Math.max(44, Math.round(outer * 0.63)),
+					legendX: legendX,
+					nameX: nameX,
+					nameMax: nameMax
+				};
+			}
+
+			// Kecilkan donat sedikit demi sedikit sampai label punya cukup ruang,
+			// supaya teks label tidak tertimpa/terpotong.
+			var fit = layout(baseOuter);
+			while (fit.nameMax < longest && fit.outer > minOuter) {
+				fit = layout(Math.max(minOuter, fit.outer - 4));
+			}
+			var cx = fit.cx;
+			var outer = fit.outer;
+			var inner = fit.inner;
+			var legendX = fit.legendX;
+			var nameX = fit.nameX;
+			var nameMax = Math.max(36, fit.nameMax);
+			var valueRight = viewW - padRight;
+
+			var svg = svgNode('svg', {
+				viewBox: '0 0 ' + viewW + ' ' + viewH, class: 'bi-svg',
+				preserveAspectRatio: 'xMidYMid meet', role: 'img'
+			});
+			var total = items.reduce(function (sum, item) {
+				return sum + Math.max(0, num(item.done != null ? item.done : item.percent));
+			}, 0);
+			var angle = -Math.PI / 2;
+
+			if (total <= 0) {
+				svg.appendChild(svgNode('circle', {
+					cx: cx, cy: cy, r: (outer + inner) / 2, fill: 'none',
+					class: 'bi-donut-track', 'stroke-width': outer - inner
+				}));
+			} else {
+				items.forEach(function (item, index) {
+					var value = Math.max(0, num(item.done != null ? item.done : item.percent));
+					var span = (value / total) * Math.PI * 2;
+					if (span <= 0) return;
+					var path = svgNode('path', {
+						d: arcPath(cx, cy, outer, inner, angle, span),
+						fill: colorOf(item, index), class: 'bi-bar-rect'
+					});
+					var title = svgNode('title');
+					title.textContent = item.label + ': ' + clampPercent(item.percent).toFixed(1) + '%';
+					path.appendChild(title);
+					svg.appendChild(path);
+					angle += span;
+				});
+			}
+
+			var average = items.reduce(function (sum, item) {
+				return sum + clampPercent(item.percent);
+			}, 0) / Math.max(1, items.length);
+			var centerSize = Math.max(15, Math.round(outer * 0.19));
+			var centerValue = svgNode('text', {
+				x: cx, y: cy - 2, class: 'bi-value-text', 'text-anchor': 'middle'
+			});
+			// Ukuran diatur lewat style (bukan atribut) karena aturan kelas
+			// .bi-value-text menang atas atribut presentasi SVG.
+			centerValue.style.fontSize = centerSize + 'px';
+			centerValue.textContent = average.toFixed(1) + '%';
+			svg.appendChild(centerValue);
+			var centerLabel = svgNode('text', {
+				x: cx, y: cy + centerSize * 0.75 + 4, class: 'bi-axis-text', 'text-anchor': 'middle'
+			});
+			centerLabel.textContent = 'rata-rata';
+			svg.appendChild(centerLabel);
+
+			var legendTop = Math.max(padTop, (viewH - items.length * rowH) / 2);
+			items.forEach(function (item, index) {
+				var y = legendTop + index * rowH;
+				svg.appendChild(svgNode('rect', {
+					x: legendX, y: y - 9, width: swatchW, height: 12, rx: 3,
+					fill: colorOf(item, index)
+				}));
+				var name = svgNode('text', { x: nameX, y: y + 1, class: 'bi-axis-text' });
+				name.textContent = fitText(item.label, nameMax);
+				if (name.textContent !== item.label) {
+					var title = svgNode('title');
+					title.textContent = item.label;
+					name.appendChild(title);
+				}
+				svg.appendChild(name);
+				var val = svgNode('text', {
+					x: valueRight, y: y + 1, class: 'bi-value-text', 'text-anchor': 'end'
+				});
+				val.textContent = clampPercent(item.percent).toFixed(1) + '%';
+				svg.appendChild(val);
+			});
+			return svg;
+		}
+
+		function renderRadar(items) {
+			if (items.length < 3) return renderBar(items);
+			var size = 430;
+			var pad = 8;
+			var cx = size / 2;
+			var cy = size / 2 + 4;
+			var count = items.length;
+			var angleOf = function (index) { return -Math.PI / 2 + (index * 2 * Math.PI) / count; };
+			var labelGap = 16;
+
+			// Ruang horizontal yang tersedia untuk sebuah label pada posisi x:
+			// teks di kiri dijangkar ke kanan (end), di kanan ke kiri (start),
+			// dan di tengah dipusatkan (middle) sehingga ruangnya dua arah.
+			function roomFor(x) {
+				if (x > cx + 6) return (size - pad) - x;
+				if (x < cx - 6) return x - pad;
+				return 2 * Math.min(x - pad, size - pad - x);
+			}
+
+			// Label ganjil digeser sedikit keluar bila label saling berdekatan,
+			// supaya tidak saling menimpa.
+			function labelOffset(index, stagger) {
+				return labelGap + (stagger && index % 2 === 1 ? 16 : 0);
+			}
+
+			function labelAnchorIn(radius, index, stagger) {
+				var point = polar(cx, cy, radius + labelOffset(index, stagger), angleOf(index));
+				return {
+					x: point[0],
+					y: point[1],
+					mode: Math.abs(point[0] - cx) < 6 ? 'middle' : (point[0] > cx ? 'start' : 'end')
+				};
+			}
+
+			function labelBox(anchor, width) {
+				var x1 = anchor.mode === 'middle' ? anchor.x - width / 2 : (anchor.mode === 'start' ? anchor.x : anchor.x - width);
+				var x2 = anchor.mode === 'middle' ? anchor.x + width / 2 : (anchor.mode === 'start' ? anchor.x + width : anchor.x);
+				return { x1: x1, y1: anchor.y - 10, x2: x2, y2: anchor.y + 3 };
+			}
+
+			/*
+			 * Nilai satu tata letak = total lebar label yang benar-benar muat.
+			 * Lebar tiap label dibatasi ruang horizontal yang ada (agar tidak
+			 * keluar kotak), lalu dikurangi bertahap selama masih ada label yang
+			 * saling menimpa (label yang lebih lebar dikorbankan lebih dulu).
+			 */
+			function evaluateLayout(radius, stagger) {
+				var anchored = items.map(function (item, index) { return labelAnchorIn(radius, index, stagger); });
+				var labelWidths = items.map(function (item, index) {
+					return Math.max(24, Math.min(textWidth(item.label), roomFor(anchored[index].x)));
+				});
+				for (var pass = 0; pass < 40; pass++) {
+					var changed = false;
+					for (var i = 0; i < anchored.length; i++) {
+						for (var j = i + 1; j < anchored.length; j++) {
+							var boxA = labelBox(anchored[i], labelWidths[i]);
+							var boxB = labelBox(anchored[j], labelWidths[j]);
+							var ox = Math.min(boxA.x2, boxB.x2) - Math.max(boxA.x1, boxB.x1);
+							var oy = Math.min(boxA.y2, boxB.y2) - Math.max(boxA.y1, boxB.y1);
+							if (ox <= 0 || oy <= 0) continue;
+							var target = labelWidths[i] >= labelWidths[j] ? i : j;
+							var next = Math.max(24, labelWidths[target] - (ox + 2));
+							if (next < labelWidths[target]) {
+								labelWidths[target] = next;
+								changed = true;
+							}
+						}
+					}
+					if (!changed) break;
+				}
+				var score = radius * 0.01;
+				labelWidths.forEach(function (width) { score += width; });
+				return { radius: radius, stagger: stagger, anchors: anchored, widths: labelWidths, score: score };
+			}
+
+			// Coba beberapa ukuran radar (dan opsi berselang-seling) lalu pilih
+			// yang paling banyak menampilkan teks label tanpa tertimpa.
+			var maxRadius = size / 2 - 76;
+			var candidates = [];
+			for (var candidateRadius = 56; candidateRadius <= maxRadius; candidateRadius += 4) {
+				candidates.push(candidateRadius);
+			}
+			if (candidates[candidates.length - 1] !== maxRadius) candidates.push(maxRadius);
+
+			var best = null;
+			candidates.forEach(function (candidateRadius) {
+				[false, true].forEach(function (candidateStagger) {
+					var layout = evaluateLayout(candidateRadius, candidateStagger);
+					if (!best || layout.score > best.score) best = layout;
+				});
+			});
+			var radius = best.radius;
+			var anchors = best.anchors;
+			var widths = best.widths;
+
+			var svg = svgNode('svg', {
+				viewBox: '0 0 ' + size + ' ' + size, class: 'bi-svg',
+				preserveAspectRatio: 'xMidYMid meet', role: 'img'
+			});
+
+			[25, 50, 75, 100].forEach(function (ring) {
+				var points = [];
+				for (var i = 0; i < count; i++) {
+					var point = polar(cx, cy, radius * ring / 100, angleOf(i));
+					points.push(point[0] + ',' + point[1]);
+				}
+				svg.appendChild(svgNode('polygon', { points: points.join(' '), fill: 'none', class: 'bi-grid-line' }));
+			});
+
+			items.forEach(function (item, index) {
+				var anchor = anchors[index];
+				var edge = polar(cx, cy, radius, angleOf(index));
+				svg.appendChild(svgNode('line', { x1: cx, y1: cy, x2: edge[0], y2: edge[1], class: 'bi-grid-line' }));
+				var text = svgNode('text', {
+					x: anchor.x, y: anchor.y, class: 'bi-axis-text', 'text-anchor': anchor.mode
+				});
+				text.textContent = fitText(item.label, widths[index]);
+				if (text.textContent !== item.label) {
+					var title = svgNode('title');
+					title.textContent = item.label;
+					text.appendChild(title);
+				}
+				svg.appendChild(text);
+			});
+
+			var targets = items.map(function (item, index) {
+				return (item.target != null && isFinite(Number(item.target)))
+					? polar(cx, cy, radius * clampPercent(item.target) / 100, angleOf(index))
+					: null;
+			});
+			if (targets.every(Boolean)) {
+				svg.appendChild(svgNode('polygon', {
+					points: targets.map(function (point) { return point[0] + ',' + point[1]; }).join(' '),
+					class: 'bi-radar-target'
+				}));
+			}
+
+			var main = items.map(function (item, index) {
+				return polar(cx, cy, radius * clampPercent(item.percent) / 100, angleOf(index));
+			});
+			svg.appendChild(svgNode('polygon', {
+				points: main.map(function (point) { return point[0] + ',' + point[1]; }).join(' '),
+				class: 'bi-radar-area'
+			}));
+			main.forEach(function (point, index) {
+				svg.appendChild(svgNode('circle', { cx: point[0], cy: point[1], r: 4, fill: colorOf(items[index], index) }));
+			});
+			return svg;
+		}
+
+		// Warna dihitung langsung sebagai hsl(H, S%, L%) bentuk klasik (koma)
+		// supaya kompatibel luas; tidak bergantung pada sintaks spasi modern
+		// atau variabel CSS, yang bisa gagal di browser/WebView lama.
+		function heatColor(percent) {
+			var hue = 8 + (clampPercent(percent) / 100) * 145;
+			var light = 13 + (clampPercent(percent) / 100) * 24;
+			return 'hsl(' + hue.toFixed(0) + ', 62%, ' + light.toFixed(0) + '%)';
+		}
+
+		function renderHeat(items) {
+			var wrap = htmlNode('div', 'bi-heat-wrap');
+
+			var legend = htmlNode('div', 'bi-heat-legend');
+			legend.appendChild(htmlNode('span', null, '0%'));
+			legend.appendChild(htmlNode('div', 'bi-heat-scale'));
+			legend.appendChild(htmlNode('span', null, '100%'));
+			wrap.appendChild(legend);
+
+			var grid = htmlNode('div', 'bi-heat');
+			items.forEach(function (item) {
+				var value = clampPercent(item.percent);
+				var cell = htmlNode('div', 'bi-heat-cell');
+				cell.style.background = heatColor(value);
+				cell.title = item.label + (item.sub ? ' \u2014 ' + item.sub : '') + ': ' + value.toFixed(1) + '%';
+				cell.appendChild(htmlNode('div', 'bi-heat-value', value.toFixed(1) + '%'));
+				cell.appendChild(htmlNode('div', 'bi-heat-label', truncate(item.label, 20)));
+				grid.appendChild(cell);
+			});
+			wrap.appendChild(grid);
+			return wrap;
+		}
+
+		var RENDERERS = { bar: renderBar, line: renderLine, donut: renderDonut, radar: renderRadar, heatmap: renderHeat };
+
+		function readData(id) {
+			if (!id) return [];
+			var node = document.getElementById(id);
+			if (!node) return [];
+			try {
+				var data = JSON.parse(node.textContent || '[]');
+				return Array.isArray(data) ? data : [];
+			} catch (error) {
+				return [];
+			}
+		}
+
+		Array.prototype.forEach.call(document.querySelectorAll('[data-bi-chart]'), function (box) {
+			var key = box.getAttribute('data-bi-chart');
+			var items = readData(box.getAttribute('data-bi-data'));
+			var tabs = box.querySelector('.bi-chart-tabs');
+			var stage = box.querySelector('.bi-chart-stage');
+			var cards = box.querySelector('.bi-chart-cards');
+			if (!tabs || !stage || !items.length) return;
+
+			var storageKey = 'bi-chart-model:' + key;
+			var model = 'cards';
+			try {
+				var saved = window.localStorage.getItem(storageKey);
+				if (saved && (saved === 'cards' || RENDERERS[saved])) model = saved;
+			} catch (error) { /* localStorage bisa diblokir */ }
+
+			function showCards() {
+				stage.hidden = true;
+				if (cards) cards.hidden = false;
+			}
+
+			function paint() {
+				Array.prototype.forEach.call(tabs.querySelectorAll('button[data-bi-model]'), function (button) {
+					button.classList.toggle('on', button.getAttribute('data-bi-model') === model);
+				});
+				stage.innerHTML = '';
+				var renderer = RENDERERS[model];
+				if (!renderer) { showCards(); return; }
+				var node = null;
+				try { node = renderer(items); } catch (error) { node = null; }
+				if (!node) { showCards(); return; }
+				stage.hidden = false;
+				if (cards) cards.hidden = true;
+				stage.appendChild(node);
+			}
+
+			tabs.addEventListener('click', function (event) {
+				var button = event.target.closest('button[data-bi-model]');
+				if (!button) return;
+				model = button.getAttribute('data-bi-model');
+				try { window.localStorage.setItem(storageKey, model); } catch (error) { /* abaikan */ }
+				paint();
+			});
+
+			paint();
+		});
+	})();
+	</script>
 </body>
 </html>

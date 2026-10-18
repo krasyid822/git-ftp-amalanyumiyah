@@ -5,6 +5,8 @@
 // Aturan struktur folder:
 //   <root>/<grup>/index.php          -> halaman grup (wajib ada)
 //   <root>/<grup>/target_settings.json
+//   <root>/test/bi/target_settings.json    -> target khusus mode "semua kelompok"
+//                                             (berdiri sendiri, bukan milik grup)
 //   <root>/<grup>/<mentee>/index.php -> halaman mentee
 //   <root>/<grup>/<mentee>/download.php
 //   <root>/<grup>/<mentee>/.THIS_IS_MENTOR -> tandai mentor
@@ -54,8 +56,9 @@ function adm_h(mixed $v): string {
 
 /** Ambil token PAT dari file. Kembalikan string kosong bila belum diisi. */
 function adm_gh_token(): string {
-    if (!is_file(GITHUB_TOKEN_FILE)) return '';
-    return trim((string) @file_get_contents(GITHUB_TOKEN_FILE));
+    // Dibaca lewat adm_secret_read_file() agar otomatis mendekripsi bila berkas
+    // disimpan sebagai amplop AES-256-GCM (lihat panel "Keamanan rahasia").
+    return adm_secret_read_file(GITHUB_TOKEN_FILE);
 }
 
 /**
@@ -93,10 +96,9 @@ function adm_gh_token_set(string $token): array {
     $kind = str_starts_with($token, 'github_pat_') ? 'fine-grained' : 'classic';
 
     // Simpan sementara supaya adm_gh_api() bisa memakainya untuk verifikasi.
-    if (@file_put_contents(GITHUB_TOKEN_FILE, $token . "\n") === false) {
+    if (!adm_secret_write_file(GITHUB_TOKEN_FILE, $token)) {
         return ['ok' => false, 'msg' => 'Gagal menulis file token. Periksa hak akses folder test/_manifest/.'];
     }
-    @chmod(GITHUB_TOKEN_FILE, 0600);
 
     // Verifikasi nyata: token HARUS bisa membaca repo manifest. Untuk fine-grained
     // ini sekaligus memastikan repo sudah dipilih saat token dibuat.
@@ -119,14 +121,15 @@ function adm_gh_token_set(string $token): array {
 
     // Cek izin tulis bila GitHub memberitahukannya.
     $perm = is_array($repo['data']['permissions'] ?? null) ? $repo['data']['permissions'] : null;
+    $sec  = adm_secret_key() !== null ? ' (terenkripsi)' : '';
     if ($perm === null) {
-        return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses ke " . MANIFEST_REPO . ' OK.'];
+        return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses ke " . MANIFEST_REPO . " OK$sec."];
     }
     if (empty($perm['push'])) {
         return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Peringatan: GitHub belum menandai izin tulis ke "
-            . MANIFEST_REPO . ' — pastikan "Contents: Read and write" agar manifest bisa ditulis.'];
+            . MANIFEST_REPO . " — pastikan \"Contents: Read and write\" agar manifest bisa ditulis$sec."];
     }
-    return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses baca+tulis ke " . MANIFEST_REPO . ' OK.'];
+    return ['ok' => true, 'msg' => "Token $kind tersimpan & terverifikasi ($who). Akses baca+tulis ke " . MANIFEST_REPO . " OK$sec."];
 }
 
 /**
@@ -651,9 +654,23 @@ function adm_target_file(string $root, string $group): string {
     return $root . '/' . $group . '/target_settings.json';
 }
 
+/**
+ * Berkas aturan target khusus mode "semua kelompok" (lintas grup). Namanya
+ * tetap target_settings.json, tapi diletakkan di folder halaman analisis
+ * lintas grup (test/bi/) -- sengaja TIDAK memakai target_settings.json
+ * milik grup mana pun.
+ */
+function adm_cross_target_file(): string {
+    return __DIR__ . '/bi/target_settings.json';
+}
+
 /** Baca target_settings.json sebuah grup. Kembalikan [] bila tidak ada/rusak. */
 function adm_read_targets(string $root, string $group): array {
-    $file = adm_target_file($root, $group);
+    return adm_read_targets_file(adm_target_file($root, $group));
+}
+
+/** Baca data target dari sebuah berkas. Kembalikan [] bila tidak ada/rusak. */
+function adm_read_targets_file(string $file): array {
     if (!is_file($file)) return [];
     $data = json_decode((string) @file_get_contents($file), true);
     return is_array($data) ? $data : [];
@@ -685,6 +702,138 @@ function adm_write_targets(string $file, array $data): array {
  * Bersihkan data dari editor sebelum ditulis: hanya key yang dikenal yang
  * disimpan, agar file tidak diisi sampah. Urutan key dibuat rapi.
  */
+
+/**
+ * Kumpulan kunci berdasarkan tipe nilainya. Dipakai bersama validator agar
+ * aturan yang mustahil tercapai (capaian selalu 0) tertangkap lebih awal.
+ */
+function adm_key_value_groups(): array {
+    return [
+        // Nilainya "✓" (centang).
+        'checkbox' => ['dhuha','tahajud','witir','senin_kamis','ayamul_bidh','sedekah','almatsurat_pagi','almatsurat_petang'],
+        // Kode kehadiran sholat wajib.
+        'sholat'   => ['subuh','dzuhur','ashar','maghrib','isya'],
+        // Satu-satunya kunci yang nilainya angka.
+        'numeric'  => ['istighfar'],
+    ];
+}
+
+/**
+ * Periksa apakah sebuah aturan masuk akal / mungkin tercapai. Mencegah aturan
+ * yang selalu 0% karena salah nilai atau kombinasi mode/kunci/periode yang
+ * mustahil (mis. mode numeric untuk kunci centang, atau day_presence dengan
+ * target lebih dari 1 per hari).
+ *
+ * @return string[] daftar masalah (kosong bila tidak ada).
+ */
+function adm_target_rule_problems(array $rule): array {
+    $problems = [];
+    $mode     = strtolower((string) ($rule['mode'] ?? 'day_presence'));
+    $period   = strtolower((string) ($rule['period'] ?? 'day'));
+    $count    = is_numeric($rule['target_count'] ?? null) ? (float) $rule['target_count'] : 0.0;
+
+    $dkRaw = is_array($rule['data_keys'] ?? null) ? $rule['data_keys'] : [];
+    $dk    = array_values(array_filter(array_map(static fn($k) => is_string($k) ? trim($k) : '', $dkRaw), static fn($k) => $k !== ''));
+
+    $groups       = adm_key_value_groups();
+    $checkboxKeys = $groups['checkbox'];
+    $sholatKeys   = $groups['sholat'];
+    $numericKeys  = $groups['numeric'];
+
+    $mv     = is_scalar($rule['match_value'] ?? null) ? trim((string) $rule['match_value']) : '';
+    $tokens = array_values(array_filter(array_map('trim', explode(',', $mv)), static fn($s) => $s !== ''));
+
+    // 1. value_count: match_value harus cocok dengan nilai yang tersimpan.
+    if ($mode === 'value_count') {
+        if ($dk !== [] && array_diff($dk, $checkboxKeys) === []) {
+            foreach ($tokens as $tok) {
+                if ($tok !== '✓') {
+                    $problems[] = "match_value '$tok' tidak cocok untuk kunci centang (nilai tersimpan \"✓\").";
+                }
+            }
+        } elseif ($dk !== [] && array_diff($dk, $sholatKeys) === []) {
+            $validMv = ['M','R-J','M-S','R','Q'];
+            foreach ($tokens as $tok) {
+                if (!in_array($tok, $validMv, true)) {
+                    $problems[] = "match_value '$tok' bukan kode sholat wajib yang sah (M, R-J, M-S, R, Q).";
+                }
+            }
+        }
+    }
+
+    // 2. numeric hanya cocok untuk kunci yang nilainya angka (istighfar).
+    if ($mode === 'numeric') {
+        foreach ($dk as $k) {
+            if (!in_array($k, $numericKeys, true)) {
+                $problems[] = "mode numeric tidak cocok untuk kunci '$k' (nilainya bukan angka). Kunci angka: " . implode(', ', $numericKeys) . ".";
+            }
+        }
+    }
+
+    // 3. day_presence maksimal 1 kejadian per hari.
+    if ($mode === 'day_presence' && $period === 'day' && $count > 1) {
+        $problems[] = "target_count $count tidak mungkin untuk day_presence periode harian (maksimal 1 per hari). Untuk target berulang, gunakan periode 'week' atau 'month'.";
+    }
+
+    // 4. filled_key_count tidak bisa melebihi jumlah kunci per hari.
+    if ($mode === 'filled_key_count' && $period === 'day' && $dk !== [] && $count > count($dk)) {
+        $problems[] = "target_count $count melebihi jumlah data_keys (" . count($dk) . ") untuk filled_key_count periode harian.";
+    }
+
+    // 5. quran_sheet_count memakai kunci tilawah.
+    if ($mode === 'quran_sheet_count' && $dk !== [] && !in_array('tilawah', $dk, true)) {
+        $problems[] = "mode quran_sheet_count biasanya memakai kunci 'tilawah'.";
+    }
+
+    return $problems;
+}
+
+/** Validasi struktur target_settings.json sebelum disimpan.
+ *  Mengembalikan ['ok'=>true] atau ['ok'=>false,'errors'=>[...]]. */
+function adm_validate_target_structure(array $raw, string $group): array {
+    $errors = [];
+    $rules  = $raw['rules'] ?? null;
+    if (!is_array($rules) || $rules === []) {
+        $errors[] = 'rules harus berisi minimal satu aturan.';
+        return ['ok' => false, 'errors' => $errors];
+    }
+    $validModes   = ['day_presence', 'value_count', 'filled_key_count', 'rawatib_count', 'numeric', 'quran_sheet_count'];
+    $validPeriods = ['day', 'week', 'month'];
+    $validKeys    = ['subuh','dzuhur','ashar','maghrib','isya','rawatib','dhuha','tahajud','witir','senin_kamis','ayamul_bidh','tilawah','sedekah','almatsurat_pagi','almatsurat_petang','istighfar'];
+
+    foreach ($rules as $i => $r) {
+        if (!is_array($r)) { $errors[] = "Aturan #" . ($i+1) . " bukan objek."; continue; }
+        $n = $i + 1;
+        $lbl = $r['label'] ?? ('#' . $n);
+        if (empty($r['label']))      $errors[] = "Aturan #$n ($lbl): label wajib diisi.";
+        if (empty($r['category']))   $errors[] = "Aturan #$n ($lbl): category wajib diisi.";
+        $mode = strtolower((string) ($r['mode'] ?? 'day_presence'));
+        if (!in_array($mode, $validModes, true)) $errors[] = "Aturan #$n ($lbl): mode '$mode' tidak dikenal.";
+        $period = strtolower((string) ($r['period'] ?? 'day'));
+        if (!in_array($period, $validPeriods, true)) $errors[] = "Aturan #$n ($lbl): periode '$period' tidak dikenal.";
+        if (!is_numeric($r['target_count'] ?? null)) $errors[] = "Aturan #$n ($lbl): target_count harus angka.";
+        if ($mode === 'value_count' && empty($r['match_value'])) $errors[] = "Aturan #$n ($lbl): match_value wajib untuk mode value_count.";
+        if ($mode !== 'rawatib_count' && empty($r['data_keys'])) {
+            $errors[] = "Aturan #$n ($lbl): data_keys wajib untuk mode $mode.";
+        } elseif (is_array($r['data_keys'] ?? null)) {
+            foreach ($r['data_keys'] as $dk) {
+                if (!in_array($dk, $validKeys, true)) {
+                    $errors[] = "Aturan #$n ($lbl): data_keys '$dk' tidak dikenal — capaian akan selalu 0.";
+                }
+            }
+        }
+        // Tangkap kombinasi mode/kunci/periode/match_value yang mustahil
+        // tercapai (capaian selalu 0) agar tidak lolos simpan.
+        foreach (adm_target_rule_problems($r) as $p) {
+            $errors[] = "Aturan #$n ($lbl): $p";
+        }
+        if ($mode === 'numeric' && !is_numeric($r['threshold'] ?? null) && !is_numeric($r['match_value'] ?? null)) {
+            $errors[] = "Aturan #$n ($lbl): threshold (atau match_value) harus angka untuk mode numeric.";
+        }
+    }
+    return ['ok' => $errors === [], 'errors' => $errors];
+}
+
 function adm_normalize_targets(array $raw, string $group): array {
     $str = static fn($v, string $d = ''): string => is_scalar($v) ? trim((string) $v) : $d;
     $num = static function ($v, float $d = 0.0): float {
@@ -754,6 +903,408 @@ function adm_normalize_targets(array $raw, string $group): array {
     return $out;
 }
 
+// ======================= AI OPENROUTER =======================
+// Koneksi ke OpenRouter (mode gratis) untuk menyusun target_settings.json
+// secara otomatis dari deskripsi rules. Hasil: {"coverable":true,"settings":{...}}
+// atau {"coverable":false,"feedback":"..."}. Rahasia disimpan di test/_ai/
+// (mode 600), tidak ikut ke git maupun ke FTP.
+const AI_DIR            = __DIR__ . '/_ai';
+const AI_KEY_FILE       = AI_DIR . '/openrouter_key';
+const AI_GH_TOKEN_F     = AI_DIR . '/github_token';
+const AI_ISSUE_REPO_F   = AI_DIR . '/issue_repo';
+const AI_ISSUE_REPO     = 'krasyid822/git-ftp-amalanyumiyah';
+const AI_MODELS_CACHE   = AI_DIR . '/models_cache.json';
+const AI_API            = 'https://openrouter.ai/api/v1/chat/completions';
+const AI_MODELS_URL     = 'https://openrouter.ai/api/v1/models';
+const AI_CACHE_TTL      = 6 * 3600;
+const AI_PERIODS        = ['day', 'week', 'month'];
+const AI_MODES          = ['value_count', 'day_presence', 'filled_key_count', 'numeric', 'rawatib', 'quran_sheet'];
+const AI_TOP_KEYS       = ['group', 'title', 'greeting', 'intro', 'closing', 'tag', 'rules'];
+const AI_RULE_KEYS      = ['category', 'label', 'target', 'period', 'target_count', 'mode', 'match_value', 'logic', 'rakaat_per_check', 'threshold', 'pages_per_sheet', 'source_dataset', 'detail', 'data_keys'];
+
+function ai_secret_read(string $file): string {
+    // Lewat pembaca rahasia terpusat: otomatis mendekripsi amplop AES-256-GCM.
+    return adm_secret_read_file($file);
+}
+
+function ai_secret_write(string $file, string $value): bool {
+    // Lewat penulis rahasia terpusat: terenkripsi bila kunci sudah diaktifkan.
+    return adm_secret_write_file($file, $value);
+}
+
+function ai_issue_repo(): string {
+    $f = ai_secret_read(AI_ISSUE_REPO_F);
+    return $f !== '' ? $f : AI_ISSUE_REPO;
+}
+
+function ai_http(string $url, array $headers = [], string $body = '', int $timeout = 30): array {
+    $ch = curl_init();
+    $h  = array_merge(['User-Agent: amalanyaumiyah-admin/1.0', 'Accept: application/json'], $headers);
+    if ($body !== '') {
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_CUSTOMREQUEST  => 'POST',
+            CURLOPT_POSTFIELDS     => $body,
+            CURLOPT_HTTPHEADER     => array_merge($h, ['Content-Type: application/json']),
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+    } else {
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => 10,
+            CURLOPT_CUSTOMREQUEST  => 'GET',
+            CURLOPT_HTTPHEADER     => $h,
+            CURLOPT_FOLLOWLOCATION => true,
+        ]);
+    }
+    $resp = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+    return [
+        'ok'   => $resp !== false && $code >= 200 && $code < 300,
+        'code' => $code,
+        'body' => $resp === false ? '' : $resp,
+        'error'=> $err,
+    ];
+}
+
+function ai_fetch_models(): array {
+    $cache = AI_MODELS_CACHE;
+    $now   = time();
+    if (is_file($cache) && ($now - @filemtime($cache)) < AI_CACHE_TTL) {
+        $c = json_decode(@file_get_contents($cache), true);
+        if (is_array($c) && isset($c['models'])) return ['ok' => true, 'models' => $c['models'], 'cached' => true];
+    }
+    $r = ai_http(AI_MODELS_URL, ['Accept: application/json']);
+    if (!$r['ok']) {
+        $body = $r['body'] !== '' ? ' — ' . mb_substr(preg_replace('/\s+/', ' ', $r['body']), 0, 160) : '';
+        return ['ok' => false, 'error' => 'Gagal ambil daftar model OpenRouter (HTTP ' . $r['code'] . ')' . $body . ' ' . $r['error']];
+    }
+    $data = json_decode($r['body'], true);
+    if (!is_array($data) || !isset($data['data'])) {
+        return ['ok' => false, 'error' => 'Format daftar model OpenRouter tidak dikenali.'];
+    }
+    $models = [];
+    foreach ($data['data'] as $m) {
+        if (!is_array($m)) continue;
+        $pricing = $m['pricing'] ?? [];
+        $models[] = [
+            'id'           => $m['id'] ?? '',
+            'ctx'          => (int) ($m['context_length'] ?? 0),
+            'prompt'       => (string) ($pricing['prompt'] ?? ''),
+            'completion'   => (string) ($pricing['completion'] ?? ''),
+        ];
+    }
+    @file_put_contents($cache, json_encode(['fetched' => $now, 'models' => $models], JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+    return ['ok' => true, 'models' => $models, 'cached' => false];
+}
+
+function ai_free_models(array $models): array {
+    $free = array_values(array_filter($models, fn($m) => $m['prompt'] === '0' && $m['completion'] === '0'));
+    uasort($free, fn($a, $b) => ($b['ctx'] <=> $a['ctx']) ?: ((str_ends_with($b['id'], ':free') <=> str_ends_with($a['id'], ':free'))));
+    return $free;
+}
+
+function ai_extract_json(string $text): ?array {
+    $text = trim($text);
+    $start = strpos($text, '{');
+    if ($start === false) return null;
+    $depth = 0; $inStr = false; $esc = false;
+    for ($i = $start; $i < strlen($text); $i++) {
+        $ch = $text[$i];
+        if ($inStr) {
+            if ($esc) { $esc = false; }
+            elseif ($ch === '\\') { $esc = true; }
+            elseif ($ch === '"') { $inStr = false; }
+            continue;
+        }
+        if ($ch === '"') { $inStr = true; continue; }
+        if ($ch === '{') { $depth++; }
+        elseif ($ch === '}') {
+            $depth--;
+            if ($depth === 0) return json_decode(substr($text, $start, $i - $start + 1), true);
+        }
+    }
+    return null;
+}
+
+function ai_validate_targets(array $settings): array {
+    $errors   = [];
+    $warnings = [];
+    $rules    = $settings['rules'] ?? null;
+    if (!is_array($rules) || $rules === []) {
+        $errors[] = 'rules harus berisi minimal satu aturan.';
+        return ['ok' => false, 'errors' => $errors, 'warnings' => $warnings];
+    }
+    foreach (array_keys($settings) as $k) {
+        if (!in_array($k, AI_TOP_KEYS, true)) $warnings[] = "Kunci tidak dikenal di level atas: $k.";
+    }
+    foreach ($rules as $i => $r) {
+        $n = $i + 1;
+        $lbl = $r['label'] ?? ('#' . $n);
+        if (!is_array($r)) { $errors[] = "Aturan #$n bukan objek."; continue; }
+        if (empty($r['label'])) $errors[] = "Aturan #$n: label wajib diisi.";
+        if (empty($r['category'])) $warnings[] = "Aturan #$n ($lbl): category kosong.";
+        if (!in_array($r['mode'] ?? '', AI_MODES, true)) $errors[] = "Aturan #$n ($lbl): mode tidak dikenal.";
+        if (!in_array($r['period'] ?? '', AI_PERIODS, true)) $errors[] = "Aturan #$n ($lbl): periode tidak dikenal.";
+        if (!is_numeric($r['target_count'] ?? null)) $errors[] = "Aturan #$n ($lbl): target_count harus angka.";
+        $mode = $r['mode'] ?? '';
+        if ($mode === 'value_count' && empty($r['match_value'])) $errors[] = "Aturan #$n ($lbl): match_value wajib untuk mode value_count.";
+        if ($mode !== 'rawatib' && empty($r['data_keys'])) {
+            $errors[] = "Aturan #$n ($lbl): data_keys wajib untuk mode $mode.";
+        }
+        // Validasi data_keys: semua kunci harus dikenal oleh sistem input mentee
+        // (tidak ada input "key lain" di halaman penginputan, jadi kunci tak dikenal
+        //  akan selalu menghasilkan capaian 0 — anomali tersembunyi).
+        $validDataKeys = ['subuh','dzuhur','ashar','maghrib','isya','rawatib','dhuha','tahajud','witir','senin_kamis','ayamul_bidh','tilawah','sedekah','almatsurat_pagi','almatsurat_petang','istighfar'];
+        if (is_array($r['data_keys'] ?? null)) {
+            foreach ($r['data_keys'] as $dk) {
+                if (!in_array($dk, $validDataKeys, true)) {
+                    $warnings[] = "Aturan #$n ($lbl): data_keys '$dk' tidak dikenal sistem input mentee — capaian akan selalu 0.";
+                }
+            }
+        }
+        if ($mode === 'numeric' && !is_numeric($r['threshold'] ?? null) && !is_numeric($r['match_value'] ?? null)) {
+            $errors[] = "Aturan #$n ($lbl): threshold (atau match_value) harus angka untuk mode numeric.";
+        }
+        // Kombinasi mode/kunci/periode/match_value yang mustahil tercapai.
+        foreach (adm_target_rule_problems($r) as $p) {
+            $errors[] = "Aturan #$n ($lbl): $p";
+        }
+        foreach (array_keys($r) as $k) {
+            if (!in_array($k, AI_RULE_KEYS, true)) $warnings[] = "Aturan #$n ($lbl): kunci tidak dikenal '$k'.";
+        }
+    }
+    return ['ok' => $errors === [], 'errors' => $errors, 'warnings' => $warnings];
+}
+
+function ai_system_prompt(): string {
+    return 'Anda adalah asisten yang menyusun aturan target untuk berkas target_settings.json.'
+        . ' Balas HANYA dengan satu objek JSON, tanpa teks tambahan di luar JSON.'
+        . ' Struktur yang diharapkan: {"coverable":true,"settings":{"group":"...","title":"...","greeting":"...","intro":"...","closing":"...","tag":"...","rules":[{"category":"SHOLAT WAJIB","label":"Sholat di masjid","target":3,"period":"day","target_count":3,"mode":"value_count","match_value":"M","data_keys":["subuh","dzuhur","ashar","maghrib","isya"]}]}}'
+        . ' Jika deskripsi rules tidak dapat diwakili oleh struktur di atas, balas: {"coverable":false,"feedback":"alasan singkat mengapa rules belum dapat diwakili struktur target_settings.json"}.'
+        . ' Kategori: SHOLAT WAJIB, SHOLAT SUNNAH, PUASA SUNNAH, TILAWAH, SEDEKAH, ALMATSURAT, ISTIGHFAR.'
+        . ' period: day = harian, week = pekanan, month = bulanan. target_count = jumlah target per periode.'
+        . ' ATURAN PERIODE: target berulang seperti "3 kali per pekan" WAJIB memakai period="week" target_count=3,'
+        . ' dan "4 kali per bulan" memakai period="month" target_count=4. Untuk day_presence, target_count pada'
+        . ' period="day" HARUS 1 (maksimal sekali sehari); jangan menulis target lebih dari 1 untuk period day.'
+        . ' PEMETAAN KUNCI -> MODE (wajib):'
+        . ' subuh/dzuhur/ashar/maghrib/isya (sholat wajib) -> mode "value_count" dengan match_value kode kehadiran'
+        . ' ("M"=Masjid/Jamaah, "R-J"=Rumah/Jamaah, "M-S"=Masjid/Sendiri, "R"=Rumah/Sendiri, "Q"=Qadha). Boleh beberapa nilai dipisah koma tanpa spasi, mis. "M,R-J" untuk berjamaah.'
+        . ' dhuha/tahajud/witir/senin_kamis/ayamul_bidh/sedekah/almatsurat_pagi/almatsurat_petang (kunci centang, nilainya "✓") -> mode "day_presence" (tanpa match_value).'
+        . ' rawatib -> mode "rawatib_count" dengan rakaat_per_check (mis. 2) dan target_count = jumlah rakaat.'
+        . ' tilawah -> mode "quran_sheet_count" dengan pages_per_sheet (mis. 2) dan target_count = jumlah lembar per periode.'
+        . ' almatsurat_pagi + almatsurat_petang -> mode "filled_key_count" target_count 2 untuk pagi & petang.'
+        . ' istighfar -> SATU-SATUNYA kunci angka; gunakan mode "numeric" dengan threshold (mis. 100).'
+        . ' JANGAN gunakan mode numeric untuk kunci selain istighfar, dan JANGAN gunakan value_count untuk kunci centang kecuali match_value="✓".'
+        . ' data_keys wajib diisi untuk semua mode KECUALI rawatib. Isi dengan kunci yang valid, contoh:'
+        . ' ["subuh","dzuhur","ashar","maghrib","isya"] untuk sholat, ["senin_kamis","ayamul_bidh"] untuk puasa, ["tilawah"] untuk tilawah.'
+        . ' Jika mode rawatib, data_keys boleh dikosongkan.'
+        . ' JANGAN pernah memakai "1"/"0" sebagai match_value.';
+}
+
+function ai_chat(string $key, string $model, string $system, string $user, bool $json = true): array {
+    $payload = [
+        'model'     => $model,
+        'messages'  => [
+            ['role' => 'system', 'content' => $system],
+            ['role' => 'user',   'content' => $user],
+        ],
+        'temperature' => 0.2,
+    ];
+    if ($json) $payload['response_format'] = ['type' => 'json_object'];
+    $r = ai_http(AI_API, [
+        'Authorization: Bearer ' . $key,
+        'Content-Type: application/json',
+        'HTTP-Referer: https://amalanyaumiyah.xo.je/',
+        'X-Title: amalanyaumiyah-admin',
+    ], json_encode($payload, JSON_UNESCAPED_UNICODE), 60);
+    if (!$r['ok']) {
+        $msg = 'HTTP ' . $r['code'];
+        if ($r['body'] !== '') $msg .= ': ' . mb_substr(preg_replace('/\s+/', ' ', $r['body']), 0, 200);
+        return ['ok' => false, 'error' => $msg, 'code' => $r['code']];
+    }
+    $d = json_decode($r['body'], true);
+    if (!is_array($d) || !isset($d['choices'][0]['message']['content'])) {
+        return ['ok' => false, 'error' => 'Respons model tidak mengandung konten.', 'body' => $r['body']];
+    }
+    return ['ok' => true, 'text' => $d['choices'][0]['message']['content']];
+}
+
+/** Benar bila error adalah jenis yang tidak akan berubah bila dicoba ulang model yang sama. */
+function ai_is_skip_error(string $error): bool {
+    $e = strtolower($error ?? '');
+    return str_contains($e, 'agentic harness')
+        || str_contains($e, 'key limit exceeded')
+        || str_contains($e, 'daily limit')
+        || str_contains($e, 'rate limit')
+        || str_contains($e, 'quota')
+        || str_contains($e, 'insufficient');
+}
+
+function ai_try_models(array $candidates, string $key, string $system, string $user): array {
+    $tried = [];
+    $max   = min(8, count($candidates));   // coba maksimal 8 model gratis
+    for ($i = 0; $i < $max; $i++) {
+        $m = $candidates[$i];
+        $id = $m['id'];
+
+        // Coba dengan response_format: json_object dulu.
+        $r = ai_chat($key, $id, $system, $user, true);
+        $tried[] = $id . ' => ' . ($r['ok'] ? 'OK' : $r['error']);
+        if ($r['ok']) return ['ok' => true, 'text' => $r['text'], 'tried' => $tried, 'model' => $id];
+
+        // Jika error adalah jenis yang tidak akan berubah di model yang sama,
+        // lewati segera ke model berikutnya.
+        if (ai_is_skip_error($r['error'] ?? '')) {
+            continue;
+        }
+
+        // Untuk error response_format / json_object, coba ulang tanpa json_object.
+        if (stripos($r['error'] ?? '', 'response_format') !== false
+            || stripos($r['error'] ?? '', 'json_object') !== false) {
+            $r2 = ai_chat($key, $id, $system, $user, false);
+            $tried[] = $id . '(tanpa json_object) => ' . ($r2['ok'] ? 'OK' : $r2['error']);
+            if ($r2['ok']) return ['ok' => true, 'text' => $r2['text'], 'tried' => $tried, 'model' => $id];
+            if (ai_is_skip_error($r2['error'] ?? '')) {
+                continue;
+            }
+        }
+
+        // Jeda singkat sebelum model berikutnya untuk mengurangi risiko rate limit.
+        usleep(400000);
+    }
+    return ['ok' => false, 'error' => 'Semua model gratis yang dicoba gagal.', 'tried' => $tried];
+}
+
+function ai_report_issue(string $title, string $body): array {
+    $token = ai_secret_read(AI_GH_TOKEN_F);
+    $repo  = ai_issue_repo();
+    if ($token === '') {
+        return ['ok' => false, 'error' => 'Belum ada token GitHub (test/_ai/github_token). Isi dulu di kolom "Simpan koneksi".'];
+    }
+    $url = 'https://api.github.com/repos/' . $repo . '/issues';
+    $r = ai_http($url, [
+        'Authorization: Bearer ' . $token,
+        'Accept: application/vnd.github+json',
+        'User-Agent: amalanyaumiyah-admin',
+        'X-GitHub-Api-Version: 2022-11-28',
+    ], json_encode(['title' => $title, 'body' => $body], JSON_UNESCAPED_UNICODE), 30);
+    if (!$r['ok']) {
+        $msg = 'Gagal membuat issue (HTTP ' . $r['code'] . ').';
+        if ($r['code'] === 401 || $r['code'] === 403) {
+            $msg .= ' Periksa izin token GitHub (perlu "Issues: Write").';
+        } elseif ($r['code'] === 404) {
+            $msg .= ' Repository "' . $repo . '" tidak ditemukan atau token tidak punya akses.';
+        }
+        return ['ok' => false, 'error' => $msg, 'body' => $r['body']];
+    }
+    $d = json_decode($r['body'], true);
+    return ['ok' => true, 'number' => (int) ($d['number'] ?? 0), 'url' => (string) ($d['html_url'] ?? '')];
+}
+
+function ai_generate(string $desc, bool $isCross): array {
+    $key = ai_secret_read(AI_KEY_FILE);
+    if ($key === '') return ['ok' => false, 'error' => 'Kunci OpenRouter belum diisi. Isi di kolom "Simpan koneksi" (test/_ai/openrouter_key).'];
+    $m = ai_fetch_models();
+    if (!$m['ok']) return ['ok' => false, 'error' => $m['error']];
+    $free = ai_free_models($m['models']);
+    if ($free === []) return ['ok' => false, 'error' => 'Tidak ada model OpenRouter gratis yang tersedia saat ini.'];
+    $system = ai_system_prompt();
+    $user = 'Deskripsi rules: "' . $desc . '"'
+        . "\nHasilkan berkas settings target_settings.json yang cocok."
+        . ' Jika rules tidak dapat diwakili oleh struktur, set coverable false dengan feedback.';
+    $res = ai_try_models($free, $key, $system, $user);
+    if (!$res['ok']) return ['ok' => false, 'error' => $res['error'], 'tried' => $res['tried']];
+    $j = ai_extract_json($res['text']);
+    if (!is_array($j)) {
+        return ['ok' => false, 'error' => 'Model tidak mengembalikan JSON yang valid.', 'tried' => $res['tried'], 'model' => $res['model'] ?? ''];
+    }
+    if (isset($j['coverable']) && $j['coverable'] === false) {
+        $feedback = (string) ($j['feedback'] ?? 'Rules tidak dapat diwakili oleh struktur target_settings.json saat ini.');
+        $gh = ai_secret_read(AI_GH_TOKEN_F);
+        $issue = $gh !== '' ? ai_report_issue(
+            'Rules target_settings.json tidak tercakup struktur (OpenRouter)',
+            'Deskripsi rules: ' . $desc . "\n\nFeedback model: " . $feedback . "\n\nModel yang dicoba: " . implode(', ', $res['tried']) . '.'
+        ) : ['ok' => false, 'error' => 'Belum ada token GitHub.'];
+        return ['ok' => false, 'coverable' => false, 'feedback' => $feedback, 'issue' => $issue, 'tried' => $res['tried'], 'model' => $res['model'] ?? ''];
+    }
+    $settings = $j['settings'] ?? null;
+    if (!is_array($settings)) {
+        return ['ok' => false, 'error' => 'JSON tidak memiliki kunci "settings".', 'tried' => $res['tried'], 'model' => $res['model'] ?? ''];
+    }
+
+    // Normalisasi hasil AI agar valid (menghindari aturan yang selalu 0%).
+    if (is_array($settings['rules'] ?? null)) {
+        $groups       = adm_key_value_groups();
+        $checkboxKeys = $groups['checkbox'];
+        $numericKeys  = $groups['numeric'];
+
+        foreach ($settings['rules'] as &$rule) {
+            if (!is_array($rule)) {
+                continue;
+            }
+
+            $mode = strtolower((string) ($rule['mode'] ?? ''));
+            $dk   = is_array($rule['data_keys'] ?? null)
+                ? array_values(array_filter(array_map(static fn($k) => is_string($k) ? trim($k) : '', $rule['data_keys']), static fn($k) => $k !== ''))
+                : [];
+
+            // Model menaruh nilai angka di match_value untuk mode numeric.
+            if ($mode === 'numeric'
+                && !is_numeric($rule['threshold'] ?? null)
+                && is_numeric($rule['match_value'] ?? null)) {
+                $rule['threshold'] = $rule['match_value'];
+            }
+
+            // numeric hanya untuk kunci angka (istighfar). Bila dipakai untuk
+            // kunci centang/presence, ubah ke day_presence.
+            if ($mode === 'numeric' && $dk !== [] && array_diff($dk, $numericKeys) !== []) {
+                $rule['mode'] = 'day_presence';
+                unset($rule['threshold']);
+                $mode = 'day_presence';
+            }
+
+            // value_count pada kunci centang dengan match_value "1"/"0"/dsb.
+            if ($mode === 'value_count' && $dk !== [] && array_diff($dk, $checkboxKeys) === []) {
+                $mv = is_scalar($rule['match_value'] ?? null) ? trim((string) $rule['match_value']) : '';
+                if (in_array($mv, ['1', '0', 'yes', 'true', 'v', 'checked', 'centang', '✓'], true)) {
+                    $rule['match_value'] = '✓';
+                }
+            }
+
+            // day_presence periode harian maksimal 1 kejadian, jadi target_count
+            // yang lebih besar tidak mungkin tercapai. Kecilkan ke 1.
+            if ($mode === 'day_presence'
+                && strtolower((string) ($rule['period'] ?? 'day')) === 'day'
+                && is_numeric($rule['target_count'] ?? null)
+                && (float) $rule['target_count'] > 1) {
+                $rule['target_count'] = 1;
+            }
+        }
+        unset($rule);
+    }
+
+    $val = ai_validate_targets($settings);
+    if (!$val['ok']) {
+        $feedback = 'Hasil AI tidak lolos validasi struktur: ' . implode('; ', $val['errors']);
+        $gh = ai_secret_read(AI_GH_TOKEN_F);
+        $issue = $gh !== '' ? ai_report_issue(
+            'Hasil AI target_settings.json gagal validasi struktur (OpenRouter)',
+            'Deskripsi rules: ' . $desc . "\n\nValidasi error: " . $feedback . "\n\nHasil model: " . json_encode($settings, JSON_UNESCAPED_UNICODE) . '.'
+        ) : ['ok' => false, 'error' => 'Belum ada token GitHub.'];
+        return ['ok' => false, 'coverable' => false, 'feedback' => $feedback, 'issue' => $issue, 'tried' => $res['tried'], 'model' => $res['model'] ?? ''];
+    }
+    if ($isCross) $settings['group'] = 'LINTAS GRUP';
+    $settings['rules'] = array_values(array_filter($settings['rules'], fn($r) => is_array($r) && !empty($r['label'])));
+    return ['ok' => true, 'settings' => $settings, 'model' => $res['model'] ?? '', 'feedback' => isset($j['feedback']) ? (string) $j['feedback'] : '', 'tried' => $res['tried']];
+}
 // ======================= AUTENTIKASI ADMIN =======================
 // Kredensial dibuat oleh ./create-admin.sh dan disimpan terenkripsi (AES-256-GCM)
 // di test/admin.json. File itu TIDAK ikut ke GitHub, tetapi ikut ke server FTP
@@ -845,6 +1396,251 @@ function adm_logged_in(): bool {
         return false;
     }
     return true;
+}
+
+// ======================= KEAMANAN RAHASIA (TOKEN & API KEY) =======================
+// Token GitHub & kunci OpenRouter disimpan sebagai berkas di server (mode 600).
+// Bila masih apa adanya (plaintext), siapa pun yang bisa membaca berkas server
+// dapat melihatnya. Halaman ini bisa mengenkripsinya sekali klik:
+//   - Kunci enkripsi (32 byte) dibungkus dengan bahan internal (adm_cred_secret())
+//     lalu DITAMBAL ke test/admin.json (bidang secret_key/secret_key_iv/secret_key_tag).
+//   - Tiap berkas rahasia ditulis ulang sebagai amplop AES-256-GCM.
+// Berkas rahasia tidak ikut ke git maupun FTP, jadi kuncinya hanya ada di server.
+
+/** Isi mentah test/admin.json (belum didekripsi). Null bila tidak ada/rusak. */
+function adm_cred_raw(): ?array {
+    if (!is_file(ADMIN_CRED_FILE)) return null;
+    $j = json_decode((string) @file_get_contents(ADMIN_CRED_FILE), true);
+    return is_array($j) ? $j : null;
+}
+
+/** Tambal (patch) sebagian bidang test/admin.json; bidang lain dipertahankan. */
+function adm_cred_patch(array $fields): bool {
+    $j = adm_cred_raw();
+    if ($j === null) return false;
+    foreach ($fields as $k => $v) $j[$k] = $v;
+    $json = json_encode($j, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($json === false) return false;
+    if (@file_put_contents(ADMIN_CRED_FILE, $json . "\n", LOCK_EX) === false) return false;
+    @chmod(ADMIN_CRED_FILE, 0600);
+    return true;
+}
+
+/** Kunci enkripsi rahasia (32 byte) dari admin.json, atau null bila belum ada. */
+function adm_secret_key(): ?string {
+    $j = adm_cred_raw();
+    if ($j === null || empty($j['secret_key'])) return null;
+    $kw  = base64_decode((string) $j['secret_key'], true);
+    $kiv = base64_decode((string) ($j['secret_key_iv'] ?? ''), true);
+    $ktg = base64_decode((string) ($j['secret_key_tag'] ?? ''), true);
+    if ($kw === false || $kw === '' || $kiv === false || $ktg === false) return null;
+    $key = openssl_decrypt($kw, 'aes-256-gcm', adm_cred_secret(), OPENSSL_RAW_DATA, $kiv, $ktg);
+    return $key === false ? null : $key;
+}
+
+/** Catatan singkat status enkripsi untuk umpan balik di UI. */
+function adm_secret_note(): string {
+    return adm_secret_key() !== null
+        ? 'terenkripsi'
+        : 'PLAINTEXT (buka panel "Keamanan rahasia" untuk mengenkripsi)';
+}
+
+/** Daftar berkas rahasia yang dipantau beserta labelnya. */
+function adm_secret_targets(): array {
+    return [
+        ['label' => 'Token GitHub — manifest PWA', 'path' => GITHUB_TOKEN_FILE],
+        ['label' => 'Kunci OpenRouter (AI)',        'path' => AI_KEY_FILE],
+        ['label' => 'Token GitHub — issue AI',      'path' => AI_GH_TOKEN_F],
+    ];
+}
+
+/** Benar bila isi berkas berbentuk amplop enkripsi yang dikenali. */
+function adm_secret_is_envelope(string $raw): bool {
+    $raw = ltrim($raw);
+    if ($raw === '' || $raw[0] !== '{') return false;
+    $j = json_decode($raw, true);
+    return is_array($j) && ($j['alg'] ?? '') === 'aes-256-gcm'
+        && isset($j['iv'], $j['tag'], $j['data']);
+}
+
+/** Enkripsi nilai dengan kunci rahasia -> string amplop JSON. Null bila gagal. */
+function adm_secret_encrypt(string $plain): ?string {
+    $key = adm_secret_key();
+    if ($key === null) return null;
+    $iv = random_bytes(12); $tag = '';
+    $ct = openssl_encrypt($plain, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    if ($ct === false) return null;
+    return json_encode([
+        'alg'  => 'aes-256-gcm',
+        'v'    => 1,
+        'iv'   => base64_encode($iv),
+        'tag'  => base64_encode($tag),
+        'data' => base64_encode($ct),
+    ], JSON_UNESCAPED_SLASHES);
+}
+
+/** Dekripsi amplop -> nilai asli, atau null bila kunci tidak ada / gagal. */
+function adm_secret_decrypt(string $raw): ?string {
+    $j = json_decode($raw, true);
+    if (!is_array($j)) return null;
+    $key = adm_secret_key();
+    if ($key === null) return null;
+    $iv  = base64_decode((string) ($j['iv']   ?? ''), true);
+    $tag = base64_decode((string) ($j['tag']  ?? ''), true);
+    $ct  = base64_decode((string) ($j['data'] ?? ''), true);
+    if ($iv === false || $tag === false || $ct === false) return null;
+    $p = openssl_decrypt($ct, 'aes-256-gcm', $key, OPENSSL_RAW_DATA, $iv, $tag);
+    return $p === false ? null : $p;
+}
+
+/**
+ * Baca rahasia dari berkas: otomatis mendekripsi bila berbentuk amplop, atau
+ * mengembalikan apa adanya bila masih plaintext. String kosong bila tak ada.
+ */
+function adm_secret_read_file(string $file): string {
+    if (!is_file($file)) return '';
+    $raw = (string) @file_get_contents($file);
+    if (trim($raw) === '') return '';
+    if (adm_secret_is_envelope($raw)) {
+        $p = adm_secret_decrypt($raw);
+        return $p === null ? '' : trim($p);
+    }
+    return trim($raw);
+}
+
+/** Tulis rahasia: dienkripsi bila kunci sudah ada, jika tidak ditulis plaintext. */
+function adm_secret_write_file(string $file, string $value): bool {
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0700, true);
+    $payload = $value;
+    if ($value !== '' && adm_secret_key() !== null) {
+        $enc = adm_secret_encrypt($value);
+        if ($enc === null) return false;
+        $payload = $enc;
+    }
+    $ok = @file_put_contents($file, $payload . ($payload !== '' ? "\n" : ''), LOCK_EX) !== false;
+    if ($ok) @chmod($file, 0600);
+    return $ok;
+}
+
+/** Status berkas rahasia: missing | plain | encrypted | locked. */
+function adm_secret_status(string $file): string {
+    if (!is_file($file)) return 'missing';
+    $raw = (string) @file_get_contents($file);
+    if (trim($raw) === '') return 'missing';
+    if (!adm_secret_is_envelope($raw)) return 'plain';
+    return adm_secret_decrypt($raw) === null ? 'locked' : 'encrypted';
+}
+
+/** Ada rahasia yang masih plaintext / terkunci? Dipakai untuk membuka panel. */
+function adm_secret_needs_attention(): bool {
+    foreach (adm_secret_targets() as $t) {
+        $s = adm_secret_status($t['path']);
+        if ($s === 'plain' || $s === 'locked') return true;
+    }
+    return false;
+}
+
+/** Jumlah berkas rahasia per status. */
+function adm_secret_counts(): array {
+    $c = ['missing' => 0, 'plain' => 0, 'encrypted' => 0, 'locked' => 0];
+    foreach (adm_secret_targets() as $t) {
+        $c[adm_secret_status($t['path'])]++;
+    }
+    return $c;
+}
+
+/** Badge ringkas status rahasia: ['text'=>..., 'class'=>...]. */
+function adm_secret_badge(): array {
+    $c = adm_secret_counts();
+    if ($c['plain'] > 0)     return ['text' => $c['plain'] . ' plaintext', 'class' => 'trash'];
+    if ($c['locked'] > 0)    return ['text' => $c['locked'] . ' terkunci', 'class' => 'mentor'];
+    if ($c['encrypted'] > 0) return ['text' => 'terenkripsi', 'class' => 'mentee'];
+    return ['text' => 'belum diisi', 'class' => 'muted'];
+}
+
+/**
+ * Aktifkan enkripsi: buat kunci (bila belum ada) + tambal ke admin.json, lalu
+ * enkripsi semua berkas rahasia yang masih plaintext.
+ * @return array{ok:bool,messages:string[]}
+ */
+function adm_secret_enable_encryption(): array {
+    $msgs = [];
+
+    // 1) Kunci: buat & tambal ke test/admin.json bila belum ada.
+    if (adm_secret_key() === null) {
+        $key = random_bytes(32);
+        $kiv = random_bytes(12); $ktg = '';
+        $kw  = openssl_encrypt($key, 'aes-256-gcm', adm_cred_secret(), OPENSSL_RAW_DATA, $kiv, $ktg);
+        if ($kw === false) {
+            return ['ok' => false, 'messages' => ['Gagal membuat kunci enkripsi.']];
+        }
+        if (!adm_cred_patch([
+            'secret_key'     => base64_encode($kw),
+            'secret_key_iv'  => base64_encode($kiv),
+            'secret_key_tag' => base64_encode($ktg),
+        ])) {
+            return ['ok' => false, 'messages' => ['Gagal menulis kunci ke test/admin.json.']];
+        }
+        // admin.json berubah -> perbarui sidik jari sesi agar tidak ter-logout.
+        $_SESSION[ADMIN_SESSION_CRED] = (string) adm_cred_fingerprint();
+        $msgs[] = 'Kunci enkripsi dibuat & ditambal ke test/admin.json.';
+    } else {
+        $msgs[] = 'Kunci enkripsi sudah ada di test/admin.json.';
+    }
+
+    // 2) Enkripsi berkas yang masih plaintext.
+    $done = 0; $fail = 0;
+    foreach (adm_secret_targets() as $t) {
+        $st = adm_secret_status($t['path']);
+        if ($st === 'missing' || $st === 'encrypted') continue;
+        if ($st === 'locked') {
+            $msgs[] = $t['label'] . ': terenkripsi tetapi kunci TIDAK cocok — isi ulang nilai ini manual.';
+            $fail++;
+            continue;
+        }
+        $val = trim((string) @file_get_contents($t['path']));
+        $enc = adm_secret_encrypt($val);
+        if ($enc === null || @file_put_contents($t['path'], $enc . "\n", LOCK_EX) === false) {
+            $msgs[] = $t['label'] . ': GAGAL dienkripsi.';
+            $fail++;
+        } else {
+            @chmod($t['path'], 0600);
+            $msgs[] = $t['label'] . ': dienkripsi.';
+            $done++;
+        }
+    }
+
+    if ($done === 0 && $fail === 0) {
+        $msgs[] = 'Tidak ada berkas plaintext — semua sudah terenkripsi atau belum diisi.';
+    }
+
+    return ['ok' => $fail === 0, 'messages' => $msgs];
+}
+
+/** Tabel status rahasia (HTML) untuk panel admin. */
+function adm_render_secret_status(): string {
+    $keyOk = adm_secret_key() !== null;
+    $badge = [
+        'encrypted' => ['Terenkripsi',           'mentee'],
+        'plain'     => ['PLAINTEXT',             'trash'],
+        'missing'   => ['Belum diisi',           'muted'],
+        'locked'    => ['Terkunci (kunci beda)', 'mentor'],
+    ];
+    $html = '<table><thead><tr><th>Rahasia</th><th>Berkas</th><th>Status</th></tr></thead><tbody>';
+    foreach (adm_secret_targets() as $t) {
+        $st  = adm_secret_status($t['path']);
+        $b   = $badge[$st] ?? ['?', 'muted'];
+        $rel = str_replace(__DIR__ . '/', '', $t['path']);
+        $html .= '<tr><td>' . $t['label'] . '</td>'
+               . '<td><code>' . adm_h($rel) . '</code></td>'
+               . '<td><span class="tag ' . $b[1] . '">' . adm_h($b[0]) . '</span></td></tr>';
+    }
+    $html .= '</tbody></table>';
+    $html .= '<p class="hint">Kunci enkripsi: '
+           . ($keyOk ? '<strong>tersedia</strong> di <code>test/admin.json</code>' : '<strong>belum dibuat</strong>')
+           . '. Berkas rahasia tidak ikut ke git maupun FTP.</p>';
+    return $html;
 }
 
 /** URL halaman ini tanpa query string (untuk redirect). */
@@ -1316,15 +2112,255 @@ if ($action !== '') {
                 if (!is_array($data)) {
                     $reply['messages'][] = adm_msg('Data target tidak valid (bukan JSON).', 'err');
                 } else {
-                    $clean = adm_normalize_targets($data, $group);
-                    $res   = adm_write_targets(adm_target_file($root, $group), $clean);
+                    $val = adm_validate_target_structure($data, $group);
+                    if (!$val['ok']) {
+                        foreach ($val['errors'] as $e) {
+                            $reply['messages'][] = adm_msg($e, 'err');
+                        }
+                    } else {
+                        $clean = adm_normalize_targets($data, $group);
+                        $res   = adm_write_targets(adm_target_file($root, $group), $clean);
+                        if ($res['ok']) {
+                            $reply['ok'] = true;
+                            $reply['messages'][] = adm_msg(
+                                "Target grup '$group' disimpan (" . count($clean['rules']) . ' aturan).'
+                            );
+                        } else {
+                            $reply['messages'][] = adm_msg($res['error'], 'err');
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- Target khusus mode "semua kelompok" (lintas grup) ----
+        // Ditulis ke test/bi/target_settings.json. Berdiri sendiri:
+        // tidak mengubah target_settings.json grup mana pun.
+        if ($action === 'save_targets_all') {
+            $raw  = (string) ($_POST['settings'] ?? '');
+            $data = json_decode($raw, true);
+
+            if (!is_array($data)) {
+                $reply['messages'][] = adm_msg('Data target lintas grup tidak valid (bukan JSON).', 'err');
+            } else {
+                $val = adm_validate_target_structure($data, 'LINTAS GRUP');
+                if (!$val['ok']) {
+                    foreach ($val['errors'] as $e) {
+                        $reply['messages'][] = adm_msg($e, 'err');
+                    }
+                } else {
+                    $clean = adm_normalize_targets($data, 'LINTAS GRUP');
+                    $res   = adm_write_targets(adm_cross_target_file(), $clean);
                     if ($res['ok']) {
                         $reply['ok'] = true;
                         $reply['messages'][] = adm_msg(
-                            "Target grup '$group' disimpan (" . count($clean['rules']) . ' aturan).'
+                            'Target khusus lintas grup disimpan (' . count($clean['rules']) . ' aturan).'
                         );
                     } else {
                         $reply['messages'][] = adm_msg($res['error'], 'err');
+                    }
+                }
+            }
+        }
+
+        // ---- Hapus target settings grup (target_settings.json) ----
+        if ($action === 'delete_targets') {
+            $group = trim((string) ($_POST['group'] ?? ''));
+
+            if (!adm_valid_name($group) || !is_dir($root . '/' . $group)) {
+                $reply['messages'][] = adm_msg('Grup tidak ditemukan.', 'err');
+            } else {
+                $file = adm_target_file($root, $group);
+                if (!is_file($file)) {
+                    $reply['messages'][] = adm_msg("Target grup '$group' belum ada.", 'err');
+                } elseif (@unlink($file)) {
+                    $reply['ok'] = true;
+                    $reply['messages'][] = adm_msg("Target grup '$group' dihapus.");
+                } else {
+                    $reply['messages'][] = adm_msg("Gagal menghapus target grup '$group'.", 'err');
+                }
+            }
+        }
+
+        // ---- Hapus target khusus lintas grup (test/bi/target_settings.json) ----
+        if ($action === 'delete_targets_all') {
+            $file = adm_cross_target_file();
+            if (!is_file($file)) {
+                $reply['messages'][] = adm_msg('Target lintas grup belum ada.', 'err');
+            } elseif (@unlink($file)) {
+                $reply['ok'] = true;
+                $reply['messages'][] = adm_msg('Target khusus lintas grup dihapus.');
+            } else {
+                $reply['messages'][] = adm_msg('Gagal menghapus target lintas grup.', 'err');
+            }
+        }
+
+        // ---- AI OpenRouter: koneksi, uji, dan penyusun rules ----
+        if ($action === 'or_save_conn') {
+            $orKey = trim((string) ($_POST['or_key'] ?? ''));
+            $ghTok = trim((string) ($_POST['gh_token'] ?? ''));
+            $repo  = trim((string) ($_POST['issue_repo'] ?? ''));
+            $saved = [];
+
+            if ($orKey !== '') {
+                $saved[] = ai_secret_write(AI_KEY_FILE, $orKey)
+                    ? 'Kunci OpenRouter disimpan (test/_ai/openrouter_key, mode 600, ' . adm_secret_note() . ').'
+                    : 'Gagal menulis kunci OpenRouter — periksa hak akses folder test/_ai/.';
+            }
+            if ($ghTok !== '') {
+                if (!adm_gh_token_format_ok($ghTok)) {
+                    $reply['messages'][] = adm_msg(
+                        'Format token GitHub tidak dikenali (harus github_pat_... atau ghp_...). Token tidak disimpan.', 'err');
+                } else {
+                    $saved[] = ai_secret_write(AI_GH_TOKEN_F, $ghTok)
+                        ? 'Token GitHub untuk issue disimpan (test/_ai/github_token, ' . adm_secret_note() . ').'
+                        : 'Gagal menulis token GitHub — periksa hak akses folder test/_ai/.';
+                }
+            }
+            if ($repo !== '') {
+                if (preg_match('#^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$#', $repo)) {
+                    $saved[] = ai_secret_write(AI_ISSUE_REPO_F, $repo)
+                        ? "Repository tujuan issue: $repo."
+                        : 'Gagal menulis nama repository issue.';
+                } else {
+                    $reply['messages'][] = adm_msg("Repository \"$repo\" tidak valid; formatnya owner/repo.", 'err');
+                }
+            }
+
+            if ($saved === []) {
+                $reply['messages'][] = adm_msg('Tidak ada kolom yang diisi — data tersimpan dibiarkan seperti adanya.', 'err');
+            } else {
+                $reply['ok'] = true;
+                foreach ($saved as $s) $reply['messages'][] = adm_msg($s);
+            }
+        }
+
+        if ($action === 'or_clear_conn') {
+            ai_secret_write(AI_KEY_FILE, '');
+            ai_secret_write(AI_GH_TOKEN_F, '');
+            $reply['ok'] = true;
+            $reply['messages'][] = adm_msg('Kunci OpenRouter & token GitHub dihapus.');
+        }
+
+        // ---- Keamanan rahasia: status & enkripsi token/API key ----
+        if ($action === 'sec_status') {
+            $reply['ok'] = true;
+            $reply['html'] = adm_render_secret_status();
+            $reply['sec_badge'] = adm_secret_badge();
+            $c = adm_secret_counts();
+            if ($c['plain'] > 0) {
+                $reply['messages'][] = adm_msg(
+                    $c['plain'] . ' rahasia masih PLAINTEXT. Klik "Enkripsi semua" untuk mengamankannya.',
+                    'err');
+            } elseif ($c['locked'] > 0) {
+                $reply['messages'][] = adm_msg(
+                    $c['locked'] . ' rahasia terkunci (kunci enkripsi tidak cocok). Isi ulang nilai rahasia itu.',
+                    'err');
+            } elseif ($c['encrypted'] > 0) {
+                $reply['messages'][] = adm_msg('Semua rahasia tersimpan terenkripsi (AES-256-GCM).');
+            } else {
+                $reply['messages'][] = adm_msg('Belum ada rahasia yang tersimpan.');
+            }
+        }
+
+        if ($action === 'sec_encrypt') {
+            $r = adm_secret_enable_encryption();
+            $reply['ok'] = $r['ok'];
+            $reply['html'] = adm_render_secret_status();
+            $reply['sec_badge'] = adm_secret_badge();
+            foreach ($r['messages'] as $m) $reply['messages'][] = adm_msg($m, $r['ok'] ? 'ok' : 'err');
+        }
+
+        if ($action === 'or_test_conn') {
+            $key  = ai_secret_read(AI_KEY_FILE);
+            $free = [];
+
+            if ($key === '') {
+                $reply['messages'][] = adm_msg('Kunci OpenRouter belum diisi.', 'err');
+            } else {
+                $reply['messages'][] = adm_msg('Kunci OpenRouter terbaca (' . strlen($key) . ' karakter).');
+            }
+
+            $gh = ai_secret_read(AI_GH_TOKEN_F);
+            $reply['messages'][] = adm_msg(
+                $gh !== ''
+                    ? 'Token GitHub issue tersimpan, repository ' . ai_issue_repo() . '.'
+                    : 'Token GitHub BELUM tersimpan — issue tidak akan dibuat bila rules tidak tercakup struktur.'
+                        . (adm_gh_token() !== '' ? ' (Akan dicoba token repo manifest sebagai cadangan.)' : ''),
+                $gh !== '' ? 'ok' : 'err'
+            );
+
+            $m = ai_fetch_models();
+            if (!$m['ok']) {
+                $reply['messages'][] = adm_msg($m['error'], 'err');
+            } else {
+                $free = ai_free_models($m['models']);
+                $reply['messages'][] = adm_msg(
+                    count($m['models']) . ' model terdaftar, ' . count($free) . ' di antaranya GRATIS dan siap dipakai'
+                    . ($m['cached'] ? ' (daftar dari cache).' : '.'),
+                    $free === [] ? 'err' : 'ok'
+                );
+                foreach (array_slice($free, 0, 3) as $c) {
+                    $reply['messages'][] = adm_msg('Kandidat otomatis: ' . $c['id'] . ' (konteks ' . number_format($c['ctx']) . ')');
+                }
+            }
+
+            // Uji nyata: satu panggilan kecil ke model kandidat pertama.
+            if ($key !== '' && $free !== []) {
+                $id = $free[0]['id'];
+                $r  = ai_chat($key, $id, 'Balas hanya JSON: {"ok":true}.', 'uji koneksi', true);
+                if ($r['ok']) {
+                    $reply['ok'] = true;
+                    $reply['messages'][] = adm_msg("Model $id merespons: "
+                        . mb_substr(trim((string) preg_replace('/\s+/', ' ', $r['text'])), 0, 80));
+                } else {
+                    $reply['messages'][] = adm_msg(
+                        "Model $id gagal: {$r['error']}. Model lain bisa tetap bisa — saat menyusun, model gratis berikutnya otomatis dicoba.",
+                        'err'
+                    );
+                }
+            }
+        }
+
+        if ($action === 'or_generate') {
+            $desc    = trim((string) ($_POST['desc'] ?? ''));
+            $isCross = ($_POST['cross'] ?? '') === '1';
+
+            if (mb_strlen($desc) < 10) {
+                $reply['messages'][] = adm_msg('Tulis deskripsi rules dulu (minimal 10 karakter).', 'err');
+            } else {
+                $g = ai_generate($desc, $isCross);
+
+                if ($g['ok']) {
+                    $nRules = is_array($g['settings']['rules'] ?? null) ? count($g['settings']['rules']) : 0;
+                    $reply['ok']         = true;
+                    $reply['settings']   = $g['settings'];
+                    $reply['model']      = (string) ($g['model'] ?? '');
+                    $reply['messages'][] = adm_msg('Model ' . $reply['model'] . " menyusun $nRules aturan."
+                        . ' Hasil diisi ke editor di bawah — periksa, lalu klik Simpan target.');
+                    if (!empty($g['feedback'])) {
+                        $reply['messages'][] = adm_msg($g['feedback'], 'err');
+                    }
+                } elseif (!empty($g['feedback'])) {
+                    // Rules tidak tercakup struktur target_settings.json:
+                    // umpan balik ke halaman admin + issue ke repository proyek.
+                    $reply['feedback']   = $g['feedback'];
+                    $reply['messages'][] = adm_msg('Rules BELUM tercakup struktur target_settings.json.', 'err');
+                    $reply['messages'][] = adm_msg(str_replace("\n", ' ', mb_substr($g['feedback'], 0, 400)), 'err');
+
+                    $issue = $g['issue'] ?? null;
+                    if (is_array($issue)) {
+                        if (!empty($issue['ok'])) {
+                            $reply['issue'] = $issue;
+                            $reply['messages'][] = adm_msg('Issue dibuat di repository proyek: ' . $issue['url']);
+                        } else {
+                            $reply['messages'][] = adm_msg((string) ($issue['error'] ?? 'Issue tidak dibuat.'), 'err');
+                        }
+                    }
+                } else {
+                    $reply['messages'][] = adm_msg((string) ($g['error'] ?? 'Gagal menyusun rules.'), 'err');
+                    if (!empty($g['tried'])) {
+                        $reply['messages'][] = adm_msg('Model dicoba: ' . implode(' | ', array_slice($g['tried'], 0, 6)), 'err');
                     }
                 }
             }
@@ -1889,6 +2925,19 @@ details.tgt[open]>summary::before{content:'▾'}
 .tgt-sep{border:0;border-top:1px dashed var(--line2);margin:14px 0}
 .tgt-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:6px}
 .tgt-note{color:var(--muted);font-size:.78rem}
+.tgt-keys{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.tgt-chip{background:#08130f;border:1px solid var(--line2);color:var(--muted);border-radius:999px;
+          padding:4px 10px;font:inherit;font-size:.75rem;cursor:pointer;line-height:1.3}
+.tgt-chip:hover{border-color:var(--accent);color:var(--text)}
+.tgt-chip.on{background:rgba(125,240,197,.18);border-color:var(--accent);color:var(--accent);font-weight:700}
+.tgt-keys-box{display:flex;flex-direction:column;gap:2px}
+.tgt-keys-box input{background:#08130f;border:1px solid var(--line2);color:var(--text);border-radius:8px;padding:6px 9px;font:inherit}
+.tgt-mv-note{color:var(--muted);font-size:.7rem;line-height:1.45}
+.tgt-moderow{display:flex;gap:10px;align-items:flex-start;margin:-2px 0 8px;flex-wrap:wrap}
+.tgt-modehint{color:var(--muted);font-size:.74rem;line-height:1.5;flex:1;min-width:180px}
+.tgt-auto{padding:4px 10px !important;font-size:.72rem !important}
+.tgt-preview{margin-top:8px;padding:8px 10px;border:1px dashed var(--line2);border-radius:9px;
+             color:var(--muted);font-size:.76rem;line-height:1.5;word-break:break-word}
 button.small{padding:5px 10px;font-size:.75rem}
 /* Popup pilih mentee untuk "Salin pesan WhatsApp" */
 .wa-modal{position:fixed;inset:0;z-index:60;display:flex;align-items:center;justify-content:center;
@@ -1906,6 +2955,7 @@ button.small{padding:5px 10px;font-size:.75rem}
          border-radius:9px;padding:10px 12px;font:inherit;font-weight:600;cursor:pointer}
 .wa-item:hover{border-color:var(--accent);background:#0a1a15}
 .wa-item.copied{border-color:var(--ok);color:var(--ok)}
+button.ghost.copied{border-color:var(--ok);color:var(--ok)}
 </style>
 </head>
 <body>
@@ -1926,6 +2976,65 @@ button.small{padding:5px 10px;font-size:.75rem}
 </header>
 
 <ul class="msgs" id="msgs"></ul>
+
+<!-- Pencarian cepat panel admin: grup, mentee, aturan target, tempat sampah -->
+<div class="panel adm-find" id="adm-find">
+    <input type="search" id="adm-find-input" placeholder="Cari grup, mentee, aturan target, sampah (tekan / untuk fokus)…" autocomplete="off" role="search">
+    <div id="adm-find-out"></div>
+    <div id="adm-find-info"></div>
+</div>
+<style>
+/* Panel pencarian cepat admin — cocok tema halaman */
+#adm-find{position:sticky;top:0;z-index:40;margin:0 0 14px;padding:12px 14px;
+    background:var(--surface);border:1px solid var(--line);border-radius:12px}
+#adm-find-input{width:100%;background:#08130f;border:1px solid var(--line2);
+    color:var(--text);border-radius:9px;padding:10px 12px;font:inherit;
+    box-sizing:border-box}
+#adm-find-input:focus{outline:2px solid var(--accent);outline-offset:1px}
+input[type=password]{background:#08130f;border:1px solid var(--line2);
+    color:var(--text);border-radius:9px;padding:9px 12px;font:inherit;
+    box-sizing:border-box}
+input[type=password]:focus{outline:2px solid var(--accent);outline-offset:1px}
+#adm-find-info{color:var(--muted);font-size:.85rem;padding:8px 12px}
+.adm-find-k{display:inline-block;width:52px;font-size:.72rem;font-weight:700;
+    border-radius:6px;padding:1px 6px;margin-right:6px;letter-spacing:.04em;
+    background:var(--line2);color:var(--muted)}
+.adm-find-k.Grup{background:rgba(143,240,176,.15);border:1px solid rgba(143,240,176,.35);
+    color:var(--ok)}
+.adm-find-k.Mentee{background:rgba(125,240,197,.15);border:1px solid rgba(125,240,197,.35);
+    color:var(--accent)}
+.adm-find-k.Aturan{background:rgba(255,210,125,.15);border:1px solid rgba(255,210,125,.35);
+    color:var(--accent2)}
+.adm-find-k.Sampah{background:rgba(255,139,139,.15);border:1px solid rgba(255,139,139,.35);
+    color:var(--danger)}
+.adm-find-n{font-weight:600}
+.adm-find-s{font-size:.78rem;color:var(--muted)}
+.adm-find-out{display:flex;flex-direction:column;gap:5px;margin-top:9px}
+.adm-find-out ul{margin:0;padding-left:20px;list-style:disc}
+.adm-find-out li{font-size:.88rem}
+.adm-find-out li button{width:100%;text-align:left;background:none;border:none;
+    padding:7px 9px;border-radius:8px;cursor:pointer;font:inherit;color:var(--text)}
+.adm-find-out li button:hover{background:var(--surface2);border-color:var(--line2)}
+.adm-find-hit{outline:2px solid var(--accent);outline-offset:4px;border-radius:12px}
+/* Blok "Susun dengan AI" di dalam editor target — cocok tema halaman */
+.tgt-ai{margin-top:14px;padding:12px;border:1px dashed var(--line2);border-radius:10px;background:var(--surface2)}
+.tgt-ai-desc{width:100%;background:#08130f;border:1px solid var(--line2);
+    color:var(--text);border-radius:8px;padding:9px 11px;resize:vertical;min-height:64px;
+    font:inherit;box-sizing:border-box}
+.tgt-ai-desc:focus{outline:2px solid var(--accent);outline-offset:1px}
+.tgt-ai-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:9px}
+.tgt-ai-out{margin-top:9px;white-space:pre-wrap}
+.tgt-ai-out:empty{display:none}
+.tgt-ai-msg{font-size:.82rem;line-height:1.5;padding:9px 11px;border-radius:8px;margin-top:6px;
+    background:var(--surface);border:1px solid var(--line)}
+.tgt-ai-msg.ok{border-color:var(--ok);color:var(--ok)}
+.tgt-ai-msg.err{border-color:var(--danger);color:var(--danger)}
+/* Notifikasi dalam panel OpenRouter (#or-msg) */
+.or-msg-item{font-size:.82rem;padding:8px 10px;border-radius:8px;margin-top:6px;
+    background:var(--surface);border:1px solid var(--line)}
+.or-msg-item.ok{border-color:var(--ok);color:var(--ok)}
+.or-msg-item.err{border-color:var(--danger);color:var(--danger)}
+</style>
 
 <div class="wa-modal" id="wa-modal" hidden>
     <div class="wa-box" role="dialog" aria-modal="true" aria-labelledby="wa-title">
@@ -1959,6 +3068,37 @@ button.small{padding:5px 10px;font-size:.75rem}
        "Target &amp; analisis" (jadi grup baru tidak punya file target yang tidak diperlukan).</p>
 </section>
 
+<?php
+    $crossTargetFile = adm_cross_target_file();
+    $crossTargets    = adm_read_targets_file($crossTargetFile);
+    $crossRules      = is_array($crossTargets['rules'] ?? null) ? $crossTargets['rules'] : [];
+?>
+<section class="panel">
+    <h2 style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        Target khusus &mdash; Analisis Semua Kelompok
+        <span class="tag <?= $crossRules ? 'mentee' : 'muted' ?>"><?= count($crossRules) ?> aturan</span>
+        <?php if (!is_file($crossTargetFile)): ?><span class="tag trash">file belum ada</span><?php endif; ?>
+        <span style="flex:1"></span>
+        <a class="tag muted" href="bi/" target="_blank" rel="noopener">buka halaman analisis</a>
+    </h2>
+    <p class="hint">Aturan di bawah <strong>hanya</strong> dipakai halaman analisis
+       <em>semua kelompok</em> (lintas grup). Berkasnya bernama
+       <code>target_settings.json</code> dan disimpan di
+       <code>test/bi/target_settings.json</code>, jadi <strong>tidak</strong> mengambil
+       <code>target_settings.json</code> milik grup mana pun. Biarkan kosong bila tidak
+       diperlukan &mdash; halaman lintas grup akan memakai perbandingan capaian umum.</p>
+    <details class="tgt" data-action="save_targets_all"
+             data-file="test/bi/target_settings.json" data-hide-group="1"
+             data-note="Aturan target khusus (dipakai halaman analisis semua kelompok):">
+        <summary>Editor target lintas grup <code>test/bi/target_settings.json</code>
+            <span class="tag <?= $crossRules ? 'mentee' : 'muted' ?>"><?= count($crossRules) ?> aturan</span>
+            <?php if (!is_file($crossTargetFile)): ?><span class="tag trash">file belum ada</span><?php endif; ?>
+        </summary>
+        <script type="application/json" class="tgt-data"><?= adm_targets_json($crossTargets) ?></script>
+        <div class="tgt-body"></div>
+    </details>
+</section>
+
 <?php foreach ($groups as $g):
     $mentes = adm_mentees($root . '/' . $g);
     $mentor = null;
@@ -1975,6 +3115,9 @@ button.small{padding:5px 10px;font-size:.75rem}
         <button class="ghost small" type="button" data-copy-wa="<?= adm_h($g) ?>"
                 data-group="<?= adm_h($g) ?>" data-origin="<?= adm_h(SITE_ORIGIN) ?>"
                 data-mentees="<?= adm_h(json_encode(array_keys($mentes), JSON_UNESCAPED_UNICODE)) ?>">Salin pesan</button>
+        <button class="ghost small" type="button" data-copy-analysis="<?= adm_h($g) ?>"
+                data-group="<?= adm_h($g) ?>" data-origin="<?= adm_h(SITE_ORIGIN) ?>"
+                title="Salin pesan berisi tautan halaman analisis grup ini">Salin pesan halaman analisis</button>
         <button class="warn small" data-act="trash_group" data-group="<?= adm_h($g) ?>"
                 data-confirm="Hapus grup &quot;<?= adm_h($g) ?>&quot; beserta <?= count($mentes) ?> mentee di dalamnya? Grup akan dipindahkan ke tempat sampah.">Hapus grup</button>
     </h2>
@@ -2127,7 +3270,8 @@ button.small{padding:5px 10px;font-size:.75rem}
     <?php $tokKind = adm_gh_token_kind(); ?>
     <?php if ($tokKind !== ''): ?>
         <p class="hint">Token <strong><?= $tokKind === 'fine' ? 'fine-grained' : ($tokKind === 'classic' ? 'classic' : 'tidak dikenali') ?></strong>
-           tersimpan di <code>test/_manifest/.token</code> (mode 600, tidak ikut ke git/server).</p>
+           tersimpan di <code>test/_manifest/.token</code> (mode 600, tidak ikut ke git/server,
+           <?= adm_h(adm_secret_note()) ?>).</p>
         <div class="row" style="margin:10px 0">
             <button class="ghost" data-act="test_gh" data-noreload="1">Uji koneksi</button>
             <button class="ghost" data-act="gh_list" data-noreload="1">Daftar file di repo</button>
@@ -2167,6 +3311,61 @@ button.small{padding:5px 10px;font-size:.75rem}
         <li><strong>Tulis SEMUA manifest</strong> mencakup manifest tiap mentee <em>dan</em> manifest dasbor tiap grup.</li>
     </ul>
 </section>
+
+<details class="panel" id="or-panel"<?= ai_secret_read(AI_KEY_FILE) !== '' ? '' : ' open' ?>>
+    <summary style="display:flex;align-items:center;gap:8px">
+        <strong style="font-size:1rem">AI OpenRouter &mdash; Susun aturan target otomatis</strong>
+        <span class="tag muted" id="or-status"><?= ai_secret_read(AI_KEY_FILE) !== '' ? 'kunci tersimpan' : 'belum dikonfigurasi' ?></span>
+        <span style="flex:1"></span>
+        <span class="hint" style="font-size:.75rem"><?= ai_secret_read(AI_KEY_FILE) !== '' ? 'Panel dikecilkan karena kunci sudah aman. Klik untuk membuka.' : 'Isi kunci OpenRouter untuk mulai menyusun aturan.' ?></span>
+    </summary>
+
+    <p class="hint">Kunci OpenRouter disimpan di <code>test/_ai/openrouter_key</code> (mode 600, tidak ikut
+       ke git/server). Model gratis dipilih otomatis; penyusunan aturan dilakukan di dalam editor
+       <em>target_settings.json</em> tiap grup dan di panel "Target khusus &mdash; Analisis Semua Kelompok".
+       Panel ini untuk mengelola koneksi.</p>
+    <h3 style="font-size:.95rem;margin:18px 0 8px;color:var(--muted)">1. Koneksi OpenRouter &amp; GitHub</h3>
+    <div class="row" style="margin:10px 0">
+        <input type="password" id="or-key" placeholder="sk-or-... (OpenRouter)" autocomplete="off" spellcheck="false">
+        <input type="text" id="or-gh" placeholder="github_pat_... untuk buat issue, kosongkan bila belum ada" autocomplete="off" spellcheck="false">
+        <input type="text" id="or-repo" placeholder="owner/repo (kosong = git-ftp-amalanyumiyah)" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="row" style="margin:10px 0">
+        <button data-act="or_save_conn" data-noreload="1" data-msg-to="or-msg" data-extra="or-key:or_key,or-gh:gh_token,or-repo:issue_repo">Simpan koneksi</button>
+        <button class="ghost" data-act="or_test_conn" data-noreload="1" data-msg-to="or-msg">Uji koneksi</button>
+        <button class="warn" data-act="or_clear_conn" data-msg-to="or-msg">Hapus kunci</button>
+    </div>
+    <div id="or-msg"></div>
+
+    <h3 style="font-size:.95rem;margin:18px 0 8px;color:var(--muted)">2. Susun aturan dari deskripsi</h3>
+    <p class="hint">Buka editor target (panel grup atau "Target khusus &mdash; Analisis Semua Kelompok"),
+       isi deskripsi rules di kolom AI, lalu klik <strong>Susun dengan AI</strong>. Hasil diisi ke editor;
+       klik <strong>Simpan target</strong> untuk menyimpannya.</p>
+</details>
+
+<?php $secBadge = adm_secret_badge(); ?>
+<details class="panel" id="sec-panel"<?= adm_secret_needs_attention() ? ' open' : '' ?>>
+    <summary style="display:flex;align-items:center;gap:8px">
+        <strong style="font-size:1rem">Keamanan rahasia &mdash; status token &amp; API key</strong>
+        <span class="tag <?= adm_h($secBadge['class']) ?>" id="sec-badge"><?= adm_h($secBadge['text']) ?></span>
+        <span style="flex:1"></span>
+        <span class="hint" style="font-size:.75rem">Token GitHub &amp; kunci OpenRouter</span>
+    </summary>
+
+    <p class="hint">Token &amp; API key disimpan sebagai berkas di server
+       (<code>test/_manifest/.token</code>, <code>test/_ai/openrouter_key</code>,
+       <code>test/_ai/github_token</code>). Bila masih <strong>plaintext</strong>, siapa pun yang bisa
+       membaca berkas server dapat melihatnya. <strong>Enkripsi sekali klik</strong>: kunci enkripsi dibuat
+       lalu ditambal ke <code>test/admin.json</code> (terbungkus, tidak ditulis apa adanya), dan tiap berkas
+       ditulis ulang sebagai <strong>AES-256-GCM</strong>. Berkas rahasia tidak ikut ke git maupun FTP.</p>
+
+    <div class="row" style="margin:10px 0">
+        <button class="ghost" data-act="sec_status" data-noreload="1" data-html-to="sec-status" data-msg-to="sec-msg">Cek status</button>
+        <button data-act="sec_encrypt" data-noreload="1" data-html-to="sec-status" data-msg-to="sec-msg">Enkripsi semua</button>
+    </div>
+    <div id="sec-status"><?= adm_render_secret_status() ?></div>
+    <div id="sec-msg"></div>
+</details>
 
 <?php nickname_render($root); ?>
 </div>
@@ -2220,6 +3419,13 @@ document.querySelectorAll('[data-act]').forEach(el=>{
 function doAction(el){
     if (el.dataset.confirm && !window.confirm(el.dataset.confirm)) return;
 
+    const btn = el.tagName === 'BUTTON' ? el : null;
+    const btnOrig = btn ? {disabled: btn.disabled, text: btn.textContent} : null;
+    if (btn){
+        btn.disabled = true;
+        btn.textContent = 'Menyimpan…';
+    }
+
     const body = new URLSearchParams();
     body.set('action', el.dataset.act);
     if (el.dataset.group) body.set('group', el.dataset.group);
@@ -2235,6 +3441,7 @@ function doAction(el){
         const field = el.dataset.fromField || 'name';
         if (!v){
             show([{type:'err', text: field === 'name' ? 'Nama tidak boleh kosong.' : 'Isian tidak boleh kosong.'}]);
+            if (btn){ btn.disabled = btnOrig.disabled; btn.textContent = btnOrig.text; }
             return;
         }
         body.set(field, v);
@@ -2245,22 +3452,225 @@ function doAction(el){
         body.set(el.dataset.fromField || 'name', '');
     }
 
+    // data-extra="id1:field1,id2:field2" kirim banyak isian sekaligus
+    // (nilai kosong tetap dikirim).
+    if (el.dataset.extra){
+        for (const pair of String(el.dataset.extra).split(',')){
+            const kv = pair.split(':');
+            const input = document.getElementById(kv[0]);
+            if (input) body.set(kv[1] || kv[0], input.value.trim());
+        }
+    }
+
     // Umpan balik segera: panggilan GitHub bisa perlu beberapa detik, supaya
     // tombol tidak terasa "tidak menghasilkan apa-apa".
     show([{text:'Memproses…'}]);
+
+    const msgTo = el.dataset.msgTo ? document.getElementById(el.dataset.msgTo) : null;
 
     fetch('', {method:'POST', body, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
         .then(r => r.json())
         .then(d => {
             show(d.messages);
+            // Juga tampilkan notifikasi di elemen target (mis. #or-msg) agar
+            // hasil terlihat di panel tempat tombol diklik, tidak hanya atas halaman.
+            if (msgTo && d.messages){
+                msgTo.innerHTML = '';
+                d.messages.forEach(m=>{
+                    const div = document.createElement('div');
+                    div.className = (m.type || 'ok') + ' or-msg-item';
+                    div.textContent = m.text;
+                    msgTo.appendChild(div);
+                });
+            }
             if (Array.isArray(d.files)) renderFiles(d.files);
+            // HTML status khusus (mis. tabel status rahasia) bila tombol minta.
+            if (d.html && el.dataset.htmlTo){
+                const box = document.getElementById(el.dataset.htmlTo);
+                if (box) box.innerHTML = d.html;
+            }
+            // Perbarui badge ringkas status rahasia tanpa reload.
+            if (d.sec_badge){
+                const b = document.getElementById('sec-badge');
+                if (b){ b.textContent = d.sec_badge.text; b.className = 'tag ' + d.sec_badge.class; }
+            }
+            // Update status panel OpenRouter bila relevan.
+            if (el.dataset.act === 'or_save_conn' || el.dataset.act === 'or_clear_conn'){
+                setOrStatus(el.dataset.act === 'or_save_conn' ? (d.ok ? 'saved' : 'error') : 'cleared');
+            }
             // Muat ulang hanya bila berhasil DAN aksi memang mengubah tampilan
             // tabel. Aksi informasi (Uji koneksi, Daftar file) ditandai
             // data-noreload supaya hasilnya tidak langsung hilang.
             if (d.ok && el.dataset.noreload === undefined) setTimeout(() => location.reload(), 700);
+            if (btn){ btn.disabled = btnOrig.disabled; btn.textContent = btnOrig.text; }
         })
-        .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
+        .catch(() => {
+            show([{type:'err', text:'Gagal menghubungi server.'}]);
+            if (msgTo){
+                msgTo.innerHTML = '<div class="err or-msg-item">Gagal menghubungi server.</div>';
+            }
+            if (btn){ btn.disabled = btnOrig.disabled; btn.textContent = btnOrig.text; }
+        });
 }
+
+// Status panel OpenRouter: menandai apakah kunci & token sudah tersimpan.
+// mode: 'saved' = berhasil simpan, 'cleared' = dihapus, 'error' = gagal simpan.
+function setOrStatus(mode){
+    const status = document.getElementById('or-status');
+    const panel  = document.getElementById('or-panel');
+    if (!status) return;
+    if (mode === 'saved'){
+        status.textContent = 'kunci tersimpan';
+        status.className = 'tag mentee';
+        if (panel) panel.open = false; // tutup panel karena konfigurasi sudah aman
+    } else if (mode === 'cleared'){
+        status.textContent = 'belum dikonfigurasi';
+        status.className = 'tag muted';
+        if (panel) panel.open = true;  // buka agar user bisa isi kembali
+    } else {
+        // error atau default: biarkan teks yang ada dari server (PHP)
+    }
+}
+
+// ===================== Pencarian cepat (grup · mentee · aturan target) =====================
+// Indeks dibangun dari DOM halaman — tanpa permintaan tambahan ke server.
+(function(){
+    const input = document.getElementById('adm-find-input');
+    const out   = document.getElementById('adm-find-out');
+    const info  = document.getElementById('adm-find-info');
+    if (!input || !out) return;
+
+    const index = [];
+    const norm = s => String(s == null ? '' : s).toLowerCase();
+
+    // Grup aktif: tautan pada <h2> panel grup, format ../<grup>/index.php
+    document.querySelectorAll('section.panel').forEach(sec => {
+        const h2a = sec.querySelector('h2 a[href]');
+        const m = h2a ? /\/([^.\/?#]+)\/index\.php$/.exec(h2a.getAttribute('href')) : null;
+        if (m) index.push({kind:'Grup', group:m[1], name:m[1], el:sec, sub:'grup'});
+    });
+
+    // Mentee aktif: checkbox "Mentor" berisi data-group & data-name
+    document.querySelectorAll('[data-act="toggle_mentor"]').forEach(el => {
+        if (!el.dataset.name) return;
+        const row = el.closest('tr');
+        index.push({kind:'Mentee', group:el.dataset.group || '', name:el.dataset.name, el:row || el,
+            sub:(el.dataset.group || '') + (el.checked ? ' · mentor' : '')});
+    });
+
+    // Isi tempat sampah & yang tidak lagi mentoring
+    document.querySelectorAll('[data-act="restore_group"]').forEach(el => {
+        index.push({kind:'Sampah', group:el.dataset.group || '', name:el.dataset.group || '',
+            el:el.closest('.row') || el, sub:'grup di tempat sampah'});
+    });
+    document.querySelectorAll('[data-act="restore_mentee"]').forEach(el => {
+        if (!el.dataset.name) return;
+        index.push({kind:'Sampah', group:el.dataset.group || '', name:el.dataset.name,
+            el:el.closest('tr') || el, sub:(el.dataset.group || '') + ' · di tempat sampah'});
+    });
+    document.querySelectorAll('[data-act="reactivate_mentee"]').forEach(el => {
+        if (!el.dataset.name) return;
+        index.push({kind:'Sampah', group:'', name:el.dataset.name,
+            el:el.closest('tr') || el, sub:'tidak lagi mentoring'});
+    });
+
+    // Aturan target: dibaca dari JSON di .tgt-data dalam <details.tgt>
+    document.querySelectorAll('details.tgt').forEach(det => {
+        let data = null;
+        try { data = JSON.parse(det.querySelector('.tgt-data').textContent) || {}; } catch (e) { data = null; }
+        const rules = (data && Array.isArray(data.rules)) ? data.rules : [];
+        const g = det.dataset.group || (det.dataset.action === 'save_targets_all' ? 'lintas grup' : '');
+        rules.forEach(r => {
+            const label = norm(r && r.label);
+            const cat   = norm(r && r.category);
+            if (!label && !cat) return;
+            index.push({kind:'Aturan', group:g, name: label ? r.label : r.category, el:det,
+                sub: [g, (r && r.category) || ''].filter(Boolean).join(' · ')});
+        });
+    });
+
+    function counts(){
+        const c = {};
+        index.forEach(i => { c[i.kind] = (c[i.kind] || 0) + 1; });
+        return [c.Grup ? c.Grup + ' grup' : '', c.Mentee ? c.Mentee + ' mentee' : '',
+                c.Aturan ? c.Aturan + ' aturan target' : '', c.Sampah ? c.Sampah + ' di sampah' : '']
+            .filter(Boolean).join(' · ');
+    }
+
+    function clearHit(){
+        document.querySelectorAll('.adm-find-hit').forEach(e => e.classList.remove('adm-find-hit'));
+    }
+
+    function go(item){
+        clearHit();
+        if (item.el.tagName === 'DETAILS') item.el.open = true;
+        if (item.el.scrollIntoView) item.el.scrollIntoView({behavior:'smooth', block:'center'});
+        item.el.classList.add('adm-find-hit');
+        setTimeout(() => item.el.classList.remove('adm-find-hit'), 2800);
+    }
+
+    function btn(item){
+        const b = document.createElement('button');
+        b.type = 'button';
+        const k = document.createElement('span'); k.className = 'adm-find-k'; k.textContent = item.kind;
+        const n = document.createElement('span'); n.className = 'adm-find-n'; n.textContent = item.name;
+        const s = document.createElement('span'); s.className = 'adm-find-s'; s.textContent = item.sub || '';
+        b.append(k, n, s);
+        b.addEventListener('click', () => go(item));
+        return b;
+    }
+
+    let timer = null;
+    function render(q){
+        const nq = norm(q);
+        out.innerHTML = '';
+        info.textContent = nq ? '' : counts();
+
+        if (!nq){ out.hidden = true; return; }
+        out.hidden = false;
+
+        const hits = index
+            .filter(it => norm(it.name).includes(nq) || norm(it.sub).includes(nq) || norm(it.group).includes(nq))
+            .sort((a, b) => (a.kind === b.kind ? 0 : (a.kind === 'Aturan' ? 1 : 0) - (b.kind === 'Aturan' ? 1 : 0))
+                        || (a.name.localeCompare(b.name)))
+            .slice(0, 80);
+
+        if (!hits.length){
+            const p = document.createElement('div');
+            p.className = 'adm-find-none';
+            p.textContent = 'Tidak ada hasil untuk “' + q + '”.';
+            out.appendChild(p);
+            return;
+        }
+        const ul = document.createElement('ul');
+        hits.forEach(it => {
+            const li = document.createElement('li');
+            li.appendChild(btn(it));
+            ul.appendChild(li);
+        });
+        out.appendChild(ul);
+        info.textContent = hits.length + (hits.length === 80 ? ' pertama' : '') + ' hasil';
+    }
+
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => render(input.value), 140);
+    });
+    input.addEventListener('keydown', e => {
+        if (e.key === 'Escape'){ input.value = ''; render(''); }
+    });
+    // "/" memfokuskan pencarian, kecuali sedang mengetik di kolom lain.
+    document.addEventListener('keydown', e => {
+        if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = document.activeElement;
+        if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+        e.preventDefault();
+        input.focus();
+        input.select();
+    });
+
+    info.textContent = counts();
+})();
 
 // ===================== Editor target_settings.json =====================
 (function(){
@@ -2281,7 +3691,16 @@ function doAction(el){
         numeric:['threshold'],
         quran_sheet_count:['pages_per_sheet','source_dataset'],
     };
-    const ALL_KEYS = ['subuh','dzuhur','ashar','maghrib','isya','rawatib','dhuha','tahajud',
+    // Penjelasan singkat tiap mode (ditampilkan di bawah pilihan mode).
+    const MODE_DESC = {
+        day_presence:      'Hitung berapa hari key terisi (mis. dhuha dikerjakan 3 hari).',
+        value_count:       'Hitung berapa kali sebuah nilai muncul pada key (mis. "M" pada sholat wajib).',
+        filled_key_count:  'Hitung berapa banyak key yang terisi dalam periode ini.',
+        rawatib_count:     'Hitung jumlah rakaat dari centang rawatib.',
+        numeric:           'Pakai ambang angka tertentu sebagai target.',
+        quran_sheet_count: 'Hitung lembar Al-Qur\u2019an dari halaman yang dicatat.',
+    };
+    const ALL_KEYS = ['subuh','dzuhur','ashar','maghrib','isya','rawatib','dhuha','tahajud','witir',
                       'senin_kamis','ayamul_bidh','tilawah','sedekah','almatsurat_pagi','almatsurat_petang','istighfar'];
 
     function mk(tag, props, ...kids){
@@ -2312,6 +3731,79 @@ function doAction(el){
         return s;
     }
 
+    // Pemilih data keys: chip yang bisa diklik.
+    function keysEditor(selected, onChange){
+        const chosen = new Set((selected||[]).filter(k => ALL_KEYS.includes(k)));
+        const chips = mk('div',{class:'tgt-keys'});
+        ALL_KEYS.forEach(k => {
+            const b = mk('button',{type:'button', class:'tgt-chip' + (chosen.has(k) ? ' on' : '')}, k);
+            b.addEventListener('click', () => {
+                if (chosen.has(k)) { chosen.delete(k); b.classList.remove('on'); }
+                else               { chosen.add(k);    b.classList.add('on'); }
+                if (onChange) onChange(Array.from(chosen));
+            });
+            chips.appendChild(b);
+        });
+        const box = mk('div',{class:'tgt-keys-box'}, chips);
+        box._read = () => Array.from(chosen);
+        return box;
+    }
+
+    // Nilai match_value yang mungkin, mengikuti Data keys yang dipilih.
+    function matchValueOptions(keys){
+        const sholat   = ['subuh','dzuhur','ashar','maghrib','isya'];
+        const checkbox = ['dhuha','tahajud','witir','senin_kamis','ayamul_bidh','sedekah','almatsurat_pagi','almatsurat_petang'];
+        const hasSholat   = keys.some(k => sholat.includes(k));
+        const hasCheckbox = keys.some(k => checkbox.includes(k));
+        const opts = [];
+        if (hasSholat) {
+            opts.push(['M',   'M — Masjid (Jamaah)']);
+            opts.push(['R',   'R — Rumah (Sendiri)']);
+            opts.push(['R-J', 'R-J — Rumah (Jamaah)']);
+            opts.push(['M-S', 'M-S — Masjid (Sendiri)']);
+            opts.push(['Q',   'Q — Qadha']);
+        }
+        if (hasCheckbox) opts.push(['\u2713', '\u2713 — Sudah dilakukan']);
+        return opts;
+    }
+
+    // Pemilih match_value: chip dinamis (bukan ketik bebas) sesuai Data keys.
+    function matchValueEditor(initial, getKeys){
+        const chosen = new Set(String(initial||'').split(',').map(s => s.trim()).filter(Boolean));
+        const chips  = mk('div',{class:'tgt-keys'});
+        const note   = mk('small',{class:'tgt-mv-note'});
+        const box    = mk('div',{class:'tgt-mv'}, chips, note);
+
+        function rebuild(){
+            const opts    = matchValueOptions(getKeys());
+            const allowed = new Set(opts.map(o => o[0]));
+            if (opts.length) {
+                Array.from(chosen).forEach(v => { if (!allowed.has(v)) chosen.delete(v); });
+            }
+            chips.innerHTML = '';
+            if (!opts.length) {
+                note.textContent = 'Pilih Data keys dulu \u2014 pilihan nilai muncul otomatis '
+                    + '(sholat wajib \u2192 M/R/R-J/M-S/Q, kunci centang \u2192 \u2713).';
+                return;
+            }
+            note.textContent = '';
+            opts.forEach(([v, t]) => {
+                const b = mk('button',{type:'button', class:'tgt-chip' + (chosen.has(v) ? ' on' : ''), title:t}, v);
+                b.addEventListener('click', () => {
+                    if (chosen.has(v)) { chosen.delete(v); b.classList.remove('on'); }
+                    else               { chosen.add(v);    b.classList.add('on'); }
+                    box.dispatchEvent(new Event('input',{bubbles:true}));
+                });
+                chips.appendChild(b);
+            });
+        }
+
+        box._read    = () => Array.from(chosen).join(',');
+        box._refresh = () => { rebuild(); box.dispatchEvent(new Event('input',{bubbles:true})); };
+        rebuild();
+        return box;
+    }
+
     function ruleCard(rule){
         const card = mk('div',{class:'tgt-rule'});
         const title = mk('strong',{text: rule.label || 'Aturan baru'});
@@ -2323,24 +3815,61 @@ function doAction(el){
         const f = {};
         f.category = inp('text', rule.category||'', {list:'tgt-cats', placeholder:'SHOLAT WAJIB'});
         f.label    = inp('text', rule.label||'');
-        f.target   = inp('text', rule.target||'', {placeholder:'3 kali per hari'});
         f.period   = sel(PERIODS, rule.period||'day');
         f.target_count = inp('number', rule.target_count != null ? rule.target_count : 1, {min:'0', step:'1'});
         f.mode     = sel(MODES, rule.mode||'day_presence');
+        f.target   = inp('text', rule.target||'', {placeholder:'3 kali per hari'});
         f.label.addEventListener('input', () => { title.textContent = f.label.value.trim() || 'Aturan baru'; });
+
+        // Target (teks) terisi otomatis dari jumlah + satuan + periode. Bisa
+        // ditimpa manual; tombol "Auto" mengembalikannya ke mode otomatis.
+        let targetAuto = !String(rule.target || '').trim();
+        function satuan(){
+            const m = f.mode.value;
+            if (m === 'quran_sheet_count') return 'lembar';
+            if (m === 'rawatib_count')     return 'rakaat';
+            if (m === 'day_presence' || m === 'filled_key_count') return 'hari';
+            return 'kali';
+        }
+        function syncTarget(){
+            if (!targetAuto) return;
+            const n = Number(f.target_count.value) || 0;
+            const word = (PERIODS.find(p => p[0] === f.period.value) || ['','per hari'])[1];
+            f.target.value = n + ' ' + satuan() + ' ' + word;
+        }
+        f.target_count.addEventListener('input', syncTarget);
+        f.period.addEventListener('change', syncTarget);
+        f.target.addEventListener('input', () => { targetAuto = false; });
+
+        const modeHint = mk('small',{class:'tgt-modehint', text: MODE_DESC[f.mode.value] || ''});
 
         card.appendChild(mk('div',{class:'tgt-grid'},
             field('Kategori', f.category),
             field('Label', f.label),
-            field('Target (teks)', f.target),
             field('Periode', f.period),
             field('Jumlah target', f.target_count),
-            field('Mode hitung', f.mode)
+            field('Mode hitung', f.mode),
+            field('Target (teks)', f.target, 'Terisi otomatis; boleh diubah manual.')
         ));
+        card.appendChild(mk('div',{class:'tgt-moderow'},
+            modeHint,
+            mk('button',{class:'ghost small tgt-auto', type:'button',
+                title:'Isi otomatis dari jumlah, satuan, dan periode',
+                onclick(){ targetAuto = true; syncTarget(); renderPreview(); }}, 'Auto')
+        ));
+
+        // Data keys dibuat lebih dulu agar pilihan match_value menyesuaikan.
+        let mvRefresh = null;
+        const keyBox = keysEditor(rule.data_keys||[], () => { if (mvRefresh) mvRefresh(); });
+        const mvBox  = matchValueEditor(rule.match_value||'', () => keyBox._read());
+        mvRefresh = () => mvBox._refresh();
 
         // Field kondisional dibuat sekali, lalu ditampilkan sesuai mode.
         const condEls = {
-            match_value:      field('Nilai dicocokkan (match_value)', inp('text', rule.match_value||'', {placeholder:'M'})),
+            match_value:      Object.assign(
+                                  field('Nilai dicocokkan (match_value)', mvBox,
+                                        'Pilih nilai yang cocok. Pilihan mengikuti Data keys di bawah; boleh lebih dari satu.'),
+                                  {_input: mvBox}),
             rakaat_per_check: field('Rakaat per centang', inp('number', rule.rakaat_per_check != null ? rule.rakaat_per_check : 2, {min:'1', step:'1'})),
             threshold:        field('Ambang (threshold)', inp('number', rule.threshold != null ? rule.threshold : (rule.target_count || 1), {min:'0'})),
             pages_per_sheet:  field('Halaman per lembar', inp('number', rule.pages_per_sheet != null ? rule.pages_per_sheet : 2, {min:'1'})),
@@ -2352,15 +3881,47 @@ function doAction(el){
             condBox.innerHTML = '';
             (MODE_FIELDS[f.mode.value]||[]).forEach(k => condBox.appendChild(condEls[k]));
         }
-        f.mode.addEventListener('change', renderCond);
+        f.mode.addEventListener('change', () => {
+            modeHint.textContent = MODE_DESC[f.mode.value] || '';
+            renderCond();
+            syncTarget();
+        });
         renderCond();
         card.appendChild(condBox);
 
-        const keysEl = inp('text', (rule.data_keys||[]).join(', '));
-        card.appendChild(field('Data keys (pisahkan koma)', keysEl, 'Pilihan: ' + ALL_KEYS.join(', ')));
+        // Data keys: chip yang bisa diklik (dinamis).
+        card.appendChild(field('Data keys', keyBox, 'Klik untuk memilih kunci data yang dihitung.'));
 
         const detailEl = mk('textarea'); detailEl.value = rule.detail || '';
         card.appendChild(field('Detail', detailEl));
+
+        // Ringkasan langsung, supaya hasil pengaturan terlihat tanpa menebak.
+        const preview = mk('div',{class:'tgt-preview'});
+        card.appendChild(preview);
+
+        function renderPreview(){
+            const out = [];
+            if (f.category.value.trim()) out.push(f.category.value.trim());
+            if (f.target.value.trim())   out.push(f.target.value.trim());
+            out.push('mode: ' + f.mode.value);
+            (MODE_FIELDS[f.mode.value]||[]).forEach(k => {
+                if (k === 'match_value') {
+                    const v = condEls[k]._input._read();
+                    if (v) out.push(k + ': ' + v);
+                    return;
+                }
+                const el = condEls[k].querySelector('input, select, textarea');
+                if (el && String(el.value).trim() !== '') out.push(k + ': ' + el.value);
+            });
+            const keys = keyBox._read();
+            if (keys.length) out.push('keys: ' + keys.join(', '));
+            preview.textContent = (f.label.value.trim() ? '\u201c' + f.label.value.trim() + '\u201d \u2014 ' : '') + out.join(' \u2022 ');
+        }
+        card.addEventListener('input', renderPreview);
+        card.addEventListener('click', renderPreview);
+
+        syncTarget();
+        renderPreview();
 
         card._read = () => {
             const m = f.mode.value;
@@ -2372,9 +3933,14 @@ function doAction(el){
                 target_count: Number(f.target_count.value) || 0,
                 mode: m,
                 detail: detailEl.value.trim(),
-                data_keys: keysEl.value.split(',').map(s => s.trim()).filter(Boolean),
+                data_keys: keyBox._read(),
             };
             (MODE_FIELDS[m]||[]).forEach(k => {
+                if (k === 'match_value') {
+                    out[k] = condEls[k]._input._read();
+                    if (out[k] === '') delete out[k];
+                    return;
+                }
                 const el = condEls[k].querySelector('input, select, textarea');
                 if (!el) return;
                 out[k] = (el.tagName === 'SELECT') ? el.value
@@ -2390,11 +3956,21 @@ function doAction(el){
         let data = {};
         try { data = JSON.parse(script.textContent) || {}; } catch (e) { data = {}; }
 
+        // Editor dipakai dua konteks: target per grup (save_targets) dan target
+        // khusus lintas grup (save_targets_all). Konteksnya dibaca dari data-*
+        // pada <details class="tgt">, jadi satu editor bisa dipakai keduanya.
+        const action    = root.dataset.action || 'save_targets';
+        const fileLabel = root.dataset.file || ((root.dataset.group || 'grup') + '/target_settings.json');
+        const hideGroup = root.dataset.hideGroup === '1';
+        const noteText  = root.dataset.note || 'Aturan target (dipakai halaman analisis grup):';
+
         const body = root.querySelector('.tgt-body');
         body.innerHTML = '';
 
         const tf = {
-            group:    inp('text', data.group||''),
+            // Untuk target lintas grup, field "Group" tidak relevan (kotak
+            // disembunyikan) tapi nilainya tetap dipakai agar format berkas sama.
+            group:    inp(hideGroup ? 'hidden' : 'text', data.group || (hideGroup ? 'LINTAS GRUP' : '')),
             tag:      inp('text', data.tag||''),
             title:    inp('text', data.title||''),
             greeting: inp('text', data.greeting||''),
@@ -2402,7 +3978,8 @@ function doAction(el){
             closing:  inp('text', data.closing||''),
         };
         body.appendChild(mk('div',{class:'tgt-grid'},
-            field('Group', tf.group), field('Tag', tf.tag),
+            hideGroup ? tf.group : field('Group', tf.group),
+            field('Tag', tf.tag),
             field('Judul', tf.title), field('Sapaan', tf.greeting)
         ));
         body.appendChild(mk('div',{class:'tgt-grid'},
@@ -2410,7 +3987,7 @@ function doAction(el){
         ));
 
         body.appendChild(mk('hr',{class:'tgt-sep'}));
-        body.appendChild(mk('div',{class:'tgt-note', text:'Aturan target (dipakai halaman analisis grup):'}));
+        body.appendChild(mk('div',{class:'tgt-note', text: noteText}));
 
         const list = mk('div');
         body.appendChild(list);
@@ -2429,8 +4006,10 @@ function doAction(el){
                     .filter(r => r.label || r.category || (r.data_keys && r.data_keys.length)),
             };
             const post = new URLSearchParams();
-            post.set('action','save_targets');
-            post.set('group', root.dataset.group);
+            post.set('action', action);
+            // save_targets butuh nama grup; save_targets_all menulis ke berkas
+            // lintas grup sendiri, jadi grup tidak dikirim.
+            if (action === 'save_targets') post.set('group', root.dataset.group || '');
             post.set('settings', JSON.stringify(settings));
             fetch('', {method:'POST', body:post, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
                 .then(r => r.json())
@@ -2438,14 +4017,221 @@ function doAction(el){
                 .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
         }
 
+        // ---- Susun aturan dengan AI (OpenRouter mode gratis) ----
+        // Ditempatkan SETELAH daftar aturan supaya tampilan penginputan utama
+        // tidak bergeser. Hasil AI diisi ke editor ini, lalu disimpan seperti biasa.
+        const aiDesc = mk('textarea', {
+            class: 'tgt-ai-desc', rows: '3',
+            placeholder: 'Tulis deskripsi rules, misalnya: sholat 5 waktu jamaah di masjid tiap hari, '
+                + 'rawatib 4 rakaat per hari, tilawah 1 lembar per hari, puasa 4x per bulan, '
+                + 'sedekah tiap pekan, istighfar 100x sehari…'
+        });
+        const aiBtn = mk('button', {type:'button'}, 'Susun dengan AI');
+        const aiOut = mk('div', {class:'tgt-ai-out'});
+        body.appendChild(mk('div', {class:'tgt-ai'},
+            mk('div', {class:'tgt-note', text:'Aturan otomatis dari deskripsi (AI):'}),
+            aiDesc,
+            mk('div', {class:'tgt-ai-row'}, aiBtn,
+                mk('span', {class:'tgt-note',
+                    text:'OpenRouter mode gratis — model dipilih otomatis; bila satu model ditolak, model gratis berikutnya dicoba.'})),
+            aiOut
+        ));
+
+        function aiClear(){
+            const box = root.querySelector('.tgt-ai-out');
+            if (box) box.textContent = '';
+        }
+        function aiNote(text, cls){
+            const box = root.querySelector('.tgt-ai-out');
+            if (!box) return;
+            const div = document.createElement('div');
+            div.className = 'tgt-ai-msg' + (cls ? ' ' + cls : '');
+            div.textContent = text;
+            box.appendChild(div);
+        }
+
+        aiBtn.addEventListener('click', () => {
+            const desc = aiDesc.value.trim();
+            if (desc.length < 10){
+                show([{type:'err', text:'Tulis deskripsi rules dulu (minimal 10 karakter).'}]);
+                aiDesc.focus();
+                return;
+            }
+            const hadRules = list.querySelectorAll('.tgt-rule').length > 0;
+            aiClear();
+            aiBtn.disabled = true;
+            aiBtn.textContent = 'Menyusun…';
+            show([{text:'AI sedang menyusun rules — model gratis dicoba satu per satu, bisa ±20 detik…'}]);
+
+            const post = new URLSearchParams();
+            post.set('action', 'or_generate');
+            post.set('desc', desc);
+            post.set('cross', action === 'save_targets_all' ? '1' : '0');
+
+            fetch('', {method:'POST', body:post, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+                .then(r => r.json())
+                .then(d => {
+                    aiBtn.disabled = false;
+                    aiBtn.textContent = 'Susun dengan AI';
+                    show(d.messages);
+
+                    if (d.ok && d.settings){
+                        const nRules = Array.isArray(d.settings.rules) ? d.settings.rules.length : 0;
+                        const model  = d.model || '?';
+                        let note = 'Model ' + model + ' menyusun ' + nRules + ' aturan dari deskripsi ini.';
+                        if (d.feedback) note += '\n' + d.feedback;
+
+                        // Isi editor dengan hasil AI, lalu gambar ulang.
+                        try { script.textContent = JSON.stringify(d.settings); } catch (e) {}
+                        build(root);
+                        const freshDesc = root.querySelector('.tgt-ai-desc');
+                        if (freshDesc) freshDesc.value = desc;
+
+                        const doSave = () => {
+                            try {
+                                sessionStorage.setItem('adm-ai-note',
+                                    'AI (' + model + ') menyusun ' + nRules + ' aturan dan menyimpannya ke '
+                                    + fileLabel + '. Periksa hasilnya; klik "Simpan target" lagi setelah diperbaiki.');
+                            } catch (e) {}
+                            const sb = Array.from(root.querySelectorAll('.tgt-actions button'))
+                                .find(b => b.textContent.trim() === 'Simpan target');
+                            if (sb) sb.click();
+                        };
+
+                        if (!hadRules){ doSave(); return; }
+
+                        if (window.confirm(
+                            'Hasil AI: ' + nRules + ' aturan (' + model + ').\n\n'
+                            + fileLabel + ' sudah berisi aturan.\n'
+                            + 'OK = timpa & simpan sekarang.\n'
+                            + 'Batal = biarkan di editor (belum tersimpan).')){
+                            doSave(); return;
+                        }
+                        aiNote(note + '\n\nBelum disimpan. Klik "Simpan target" bila hasil ini mau dipertahankan, '
+                            + 'atau muat ulang halaman untuk membatalkan.', 'ok');
+                        return;
+                    }
+
+                    if (d.feedback){
+                        // Rules tidak tercakup struktur target_settings.json:
+                        // umpan balik ke halaman admin (+ issue ke repo bila ada token).
+                        aiNote('Umpan balik AI — rules belum bisa diwakili struktur target_settings.json:\n'
+                               + d.feedback, 'err');
+                        if (d.issue){
+                            if (d.issue.ok && d.issue.url){
+                                aiNote('Issue dibuat di repository proyek: #' + d.issue.number + ' — ' + d.issue.url, 'ok');
+                            } else {
+                                aiNote('Issue BELUM dibuat: ' + (d.issue.error || 'penyebab tidak diketahui')
+                                       + '\nSalin umpan balik di atas dan buat issue secara manual.', 'err');
+                            }
+                        }
+                        return;
+                    }
+
+                    aiNote(d.error || 'Gagal menyusun rules. Coba lagi atau ubah deskripsinya.', 'err');
+                })
+                .catch(() => {
+                    aiBtn.disabled = false;
+                    aiBtn.textContent = 'Susun dengan AI';
+                    show([{type:'err', text:'Gagal menghubungi server.'}]);
+                });
+        });
+
+        // ---- Ekspor target_settings.json ke MD / TXT ----
+        function downloadBlob(blob, namaFile){
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = namaFile;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        }
+        function rulesToMd(){
+            const rules = Array.isArray(data.rules) ? data.rules : [];
+            const lines = [
+                '# ' + (data.title || 'Target Settings'),
+                '',
+                'Group: ' + (data.group || '-'),
+                'Tag: ' + (data.tag || '-'),
+                '',
+                data.greeting ? '> ' + data.greeting : '',
+                data.intro ? '' + data.intro : '',
+                '',
+                '## Aturan',
+                '',
+                '| Kategori | Label | Target | Periode | Mode | Target Count |',
+                '|----------|-------|--------|---------|------|--------------|',
+            ];
+            rules.forEach(r => {
+                lines.push('| ' + (r.category||'-') + ' | ' + (r.label||'-') + ' | ' + (r.target||'-') + ' | ' + (r.period||'-') + ' | ' + (r.mode||'-') + ' | ' + (r.target_count||0) + ' |');
+            });
+            lines.push('');
+            if (data.closing) lines.push('*' + data.closing + '*');
+            return lines.join('\n') + '\n';
+        }
+        function rulesToTxt(){
+            const rules = Array.isArray(data.rules) ? data.rules : [];
+            const lines = [
+                'TARGET SETTINGS: ' + (data.title || 'Target Settings'),
+                'Group: ' + (data.group || '-'),
+                'Tag: ' + (data.tag || '-'),
+                '',
+                data.greeting ? data.greeting : '',
+                data.intro ? data.intro : '',
+                '',
+                'ATURAN:',
+                '',
+            ];
+            rules.forEach((r, i) => {
+                lines.push((i+1) + '. ' + (r.label||'-') + ' [' + (r.category||'-') + ']');
+                lines.push('   Target: ' + (r.target||'-') + ' | Periode: ' + (r.period||'-') + ' | Mode: ' + (r.mode||'-') + ' | Target Count: ' + (r.target_count||0));
+                if (r.match_value) lines.push('   Match Value: ' + r.match_value);
+                if (r.threshold != null) lines.push('   Threshold: ' + r.threshold);
+                if (r.data_keys && r.data_keys.length) lines.push('   Data Keys: ' + r.data_keys.join(', '));
+                lines.push('');
+            });
+            if (data.closing) lines.push(data.closing);
+            return lines.join('\n') + '\n';
+        }
+
         body.appendChild(mk('div',{class:'tgt-actions'},
             mk('button',{class:'ghost', type:'button', onclick(){ list.appendChild(ruleCard({})); }}, '+ Tambah aturan'),
             mk('button',{type:'button', onclick: save}, 'Simpan target'),
-            mk('span',{class:'tgt-note', text:'File: ' + root.dataset.group + '/target_settings.json'})
+            mk('button',{class:'ghost', type:'button', onclick(){ downloadBlob(new Blob([rulesToMd()],{type:'text/markdown'}), (data.group||'target')+'.md'); }}, 'Ekspor MD'),
+            mk('button',{class:'ghost', type:'button', onclick(){ downloadBlob(new Blob([rulesToTxt()],{type:'text/plain'}), (data.group||'target')+'.txt'); }}, 'Ekspor TXT'),
+            mk('button',{class:'warn small', type:'button', onclick(){
+                const isCross = action === 'save_targets_all';
+                const nama = isCross ? 'lintas grup (test/bi/target_settings.json)' : "grup '" + (root.dataset.group||'') + "'";
+                if (!window.confirm('Hapus target_settings.json ' + nama + '?\n\nAturan akan hilang dan kartu target tidak akan muncul di halaman penginputan.')) return;
+                const post = new URLSearchParams();
+                post.set('action', isCross ? 'delete_targets_all' : 'delete_targets');
+                if (!isCross) post.set('group', root.dataset.group || '');
+                fetch('', {method:'POST', body:post, headers:{'Content-Type':'application/x-www-form-urlencoded'}})
+                    .then(r => r.json())
+                    .then(d => {
+                        show(d.messages);
+                        if (d.ok) setTimeout(() => location.reload(), 700);
+                    })
+                    .catch(() => show([{type:'err', text:'Gagal menghubungi server.'}]));
+            }}, 'Hapus target'),
+            mk('span',{class:'tgt-note', text:'File: ' + fileLabel})
         ));
     }
 
     document.querySelectorAll('details.tgt').forEach(build);
+})();
+
+// Catatan hasil AI disimpan di sessionStorage sebelum "Simpan target" memuat
+// ulang halaman, sehingga catatan tetap terlihat setelah reload.
+(function(){
+    try {
+        const note = sessionStorage.getItem('adm-ai-note');
+        if (!note) return;
+        sessionStorage.removeItem('adm-ai-note');
+        show([{type:'ok', text: note}]);
+    } catch (e) {}
 })();
 
 // ============ Salin pesan WhatsApp (popup pilih mentee) ============
@@ -2470,6 +4256,24 @@ function doAction(el){
              + 'Amalan Yaumiyah\n'
              + 'Grup   : *```' + group + '```*\n'
              + 'Mentee : *```' + name + '```*\n'
+             + 'Link   : ' + url + '\n'
+             + '\n'
+             + 'Barakallahu fiik.\n'
+             + "Wassalamu'alaikum warahmatullahi wabarakatuh\n"
+             + '\n'
+             + '———\n'
+             + 'Web refleksi untuk mentee: https://refleksiformentee.xo.je';
+    }
+
+    // Pesan untuk halaman ANALISIS grup (dipakai mentor/pengurus).
+    function analysisMessage(group, origin){
+        const url = String(origin || location.origin).replace(/\/+$/, '') + '/' + group + '/index.php';
+        return "Assalamu'alaikum warahmatullahi wabarakatuh\n"
+             + '\n'
+             + 'Berikut tautan halaman analisis amalan yaumiyah grup untuk memantau capaian bersama.\n'
+             + '\n'
+             + 'Amalan Yaumiyah \u2014 Analisis Grup\n'
+             + 'Grup   : *```' + group + '```*\n'
              + 'Link   : ' + url + '\n'
              + '\n'
              + 'Barakallahu fiik.\n'
@@ -2523,6 +4327,23 @@ function doAction(el){
                 });
             }
             modal.hidden = false;
+        });
+    });
+
+    // Tombol "Salin pesan halaman analisis": langsung salin (tanpa popup).
+    document.querySelectorAll('[data-copy-analysis]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const group = btn.dataset.group || btn.dataset.copyAnalysis || '';
+            const origin = btn.dataset.origin || location.origin;
+            const text = analysisMessage(group, origin);
+            const done = () => {
+                const old = btn.textContent;
+                btn.textContent = 'Tersalin \u2713';
+                btn.classList.add('copied');
+                show([{ type: 'ok', text: 'Pesan halaman analisis grup \'' + group + '\' tersalin ke clipboard.' }]);
+                setTimeout(() => { btn.textContent = old; btn.classList.remove('copied'); }, 1400);
+            };
+            copyText(text).then(done).catch(done);
         });
     });
 

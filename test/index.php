@@ -11,6 +11,22 @@ if (!isset($dataFile)) {
 // __DIR__ adalah konstanta PHP yang berarti "direktori dari file ini".
 // Ini memastikan path akan selalu benar, tidak peduli dari mana file ini di-include.
 
+// Support stub redirect (contoh: ftj/rasyid/index.php).
+// Satu orang bisa ada di banyak grup, jadi data_amalan.json tidak ada di folder
+// mentee itu sendiri. test/index.php dipanggil dengan ?mentee=x&group=y agar
+// tahu data file dan target settings mana yang harus dipakai.
+if (!empty($_GET['mentee']) && !empty($_GET['group'])) {
+    $mentee = basename($_GET['mentee']);
+    $group  = basename($_GET['group']);
+    // Simpan grup tujuan stub redirect untuk kartu target, meski data_amalan.json
+    // belum ada di folder mentee (satu orang di banyak grup).
+    $stubGroup = $group;
+    if (!isset($dataFile) && is_file(__DIR__ . '/../' . $group . '/' . $mentee . '/data_amalan.json')) {
+        $dataFile = __DIR__ . '/../' . $group . '/' . $mentee . '/data_amalan.json';
+    }
+}
+// Akhir support stub redirect.
+
 // CATATAN: bi.php TIDAK di-load di sini. File itu mendefinisikan sebagian
 // fungsi bi_* yang sama dengan yang ada di bawah (mis. bi_normalize_quran_key),
 // sehingga meng-include-nya menimbulkan fatal "Cannot redeclare function".
@@ -839,6 +855,93 @@ $semuaDataAmalan = bacaDataAmalan($dataFile);
 $dataBulanIni = $semuaDataAmalan[$bulan_sekarang] ?? [];
 $jumlah_hari = date('t');
 $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
+
+// --- KARTU TARGET (opsional) -------------------------------------------------
+// Muncul HANYA kalau grup pemilik mentee ini punya target_settings.json.
+// Ditaruh di bawah tabel input supaya tidak mengganggu tampilan penginputan.
+$targetCard = null;
+$menteeDirTarget = dirname($dataFile);
+$grupDirTarget   = dirname($menteeDirTarget);
+// Support stub redirect: gunakan grup dari parameter ?group= untuk mencari
+// target_settings.json, meski data_amalan.json berada di grup lain.
+if (isset($stubGroup) && is_file(__DIR__ . '/../' . $stubGroup . '/target_settings.json')) {
+    $grupDirTarget = __DIR__ . '/../' . $stubGroup;
+}
+if ((basename($menteeDirTarget) !== 'test' || isset($stubGroup)) && is_file($grupDirTarget . '/target_settings.json')) {
+    require_once __DIR__ . '/target_engine.php';
+
+    $aturanTarget = bi_load_target_settings_file($grupDirTarget . '/target_settings.json');
+    $daftarAturan = [];
+    foreach (($aturanTarget['rules'] ?? []) as $aturan) {
+        if (is_array($aturan)) {
+            $daftarAturan[] = $aturan;
+        }
+    }
+
+    // Jika target_settings menyebut 'witir' di data_keys, tambahkan amalan Witir
+    // ke struktur input (hanya muncul jika ada di target_settings).
+    $hasWitir = false;
+    foreach ($daftarAturan as $aturan) {
+        if (is_array($aturan) && in_array('witir', (array) ($aturan['data_keys'] ?? []), true)) {
+            $hasWitir = true;
+            break;
+        }
+    }
+    if ($hasWitir && !isset($daftar_amalan['SHOLAT SUNNAH']['witir'])) {
+        $daftar_amalan['SHOLAT SUNNAH']['witir'] = 'Witir';
+    }
+
+    if ($daftarAturan) {
+        $ringkasTarget = bi_compute_target_summary($dataBulanIni, $jumlah_hari, $daftarAturan, $bulan_sekarang);
+        $kartuAturan = [];
+
+        foreach ($daftarAturan as $i => $aturan) {
+            $prog = $ringkasTarget['rules'][$i] ?? null;
+            if (!is_array($prog)) {
+                continue;
+            }
+
+            // Grafik "bayangan target": tiap batang punya tinggi target (ghost)
+            // dan tinggi capaian (isi). Skala disamakan per aturan.
+            $breakdown = bi_target_rule_period_breakdown($dataBulanIni, $jumlah_hari, $aturan, $bulan_sekarang);
+            $maxNilai = 1.0;
+            foreach ($breakdown as $b) {
+                $maxNilai = max($maxNilai, (float) $b['target'], (float) $b['done']);
+            }
+            $bars = [];
+            foreach ($breakdown as $b) {
+                $bars[] = [
+                    'label'     => $b['label'],
+                    'done'      => $b['done'],
+                    'target'    => $b['target'],
+                    'ghost_pct' => round((float) $b['target'] / $maxNilai * 100, 2),
+                    'done_pct'  => round(min((float) $b['done'], $maxNilai) / $maxNilai * 100, 2),
+                    'reached'   => (bool) $b['reached'],
+                ];
+            }
+
+            $kartuAturan[] = [
+                'category'         => $prog['category'],
+                'label'            => $prog['label'],
+                'target_text'      => trim((string) ($aturan['target'] ?? '')),
+                'percent'          => $prog['percent'],
+                'done'             => $prog['done'],
+                'done_raw'         => $prog['done_raw'] ?? $prog['done'],
+                'possible'         => $prog['possible'],
+                'periods_done'     => $prog['periods_done'],
+                'periods_possible' => $prog['periods_possible'],
+                'bars'             => $bars,
+            ];
+        }
+
+        $targetCard = [
+            'nama_grup'   => basename($grupDirTarget),
+            'overall'     => $ringkasTarget['overall_percent'],
+            'bulan_label' => date('F Y'),
+            'rules'       => $kartuAturan,
+        ];
+    }
+}
 
 ?>
 <!DOCTYPE html>
@@ -3323,6 +3426,9 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
         <?php foreach (['dhuha', 'tahajud'] as $key): ?>
             <input type="checkbox" id="<?= $key ?>" name="<?= $key ?>" value="✓">
         <?php endforeach; ?>
+        <?php if (isset($daftar_amalan['SHOLAT SUNNAH']['witir'])): ?>
+            <input type="checkbox" id="witir" name="witir" value="✓">
+        <?php endif; ?>
 
         <!-- TILAWAH hidden inputs -->
         <input type="text" id="tilawah_surat" name="tilawah_surat">
@@ -3470,6 +3576,101 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
                 <i class="fa-solid fa-cloud-arrow-up"></i> <span id="sync-status-text">Semua data sinkron dengan server</span>
             </div>
         </div>
+
+        <?php if ($targetCard !== null): ?>
+        <style>
+        .tc-card{margin-top:24px;padding:18px 18px 14px;border:1px solid var(--md-sys-color-outline-variant);border-radius:16px;
+                 background:var(--md-sys-color-surface-container-low,var(--md-sys-color-surface));
+                 color:var(--md-sys-color-on-surface);text-align:left}
+        .tc-head{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+        .tc-title{font-weight:800;font-size:.95rem;display:inline-flex;align-items:center;gap:8px}
+        .tc-title i{color:var(--md-sys-color-primary)}
+        .tc-group{font-weight:600;font-size:.7rem;color:var(--md-sys-color-on-surface-variant);
+                  border:1px solid var(--md-sys-color-outline-variant);border-radius:999px;padding:2px 8px}
+        .tc-overall{margin-left:auto;text-align:right;line-height:1.1}
+        .tc-overall b{font-size:1.3rem;color:var(--md-sys-color-primary);font-variant-numeric:tabular-nums}
+        .tc-overall span{display:block;font-size:.62rem;text-transform:uppercase;letter-spacing:.08em;
+                         color:var(--md-sys-color-on-surface-variant)}
+        .tc-bar{height:8px;border-radius:999px;background:var(--md-sys-color-surface-container-high);
+                overflow:hidden;margin-bottom:16px}
+        .tc-bar span{display:block;height:100%;border-radius:999px;
+                     background:linear-gradient(90deg,var(--md-sys-color-primary),var(--color-primary-dark,var(--md-sys-color-primary)))}
+        .tc-rules{display:grid;grid-template-columns:repeat(auto-fill,minmax(232px,1fr));gap:12px}
+        .tc-rule{border:1px solid var(--md-sys-color-outline-variant);border-radius:12px;padding:10px 12px 12px;
+                 background:var(--md-sys-color-surface-container-lowest,transparent)}
+        .tc-rule-head{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:.82rem;line-height:1.25}
+        .tc-rule-label{min-width:0}
+        .tc-rule-pct{margin-left:auto;color:var(--md-sys-color-primary);font-variant-numeric:tabular-nums;white-space:nowrap}
+        .tc-meta{font-size:.67rem;color:var(--md-sys-color-on-surface-variant);margin:3px 0 8px;
+                 display:flex;flex-wrap:wrap;gap:2px 8px}
+        .tc-cat{font-weight:700;letter-spacing:.04em}
+        .tc-chart{display:flex;align-items:flex-end;gap:2px;height:54px;padding-top:2px}
+        .tc-col{position:relative;flex:1 1 0;min-width:0;height:100%}
+        .tc-ghost{position:absolute;left:0;right:0;bottom:0;border-radius:3px;background:var(--md-sys-color-primary-container);
+                  border-top:1.5px dashed var(--md-sys-color-primary);opacity:.9}
+        .tc-done{position:absolute;left:0;right:0;bottom:0;border-radius:3px;
+                 background:linear-gradient(180deg,var(--md-sys-color-primary),var(--color-primary-dark,var(--md-sys-color-primary)))}
+        .tc-col.tc-reached .tc-done{background:linear-gradient(180deg,var(--color-good,var(--md-sys-color-primary)),
+                                    var(--color-good-text,var(--md-sys-color-primary)))}
+        .tc-legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:12px;font-size:.68rem;
+                   color:var(--md-sys-color-on-surface-variant)}
+        .tc-legend span{display:inline-flex;align-items:center;gap:6px}
+        .tc-sw{width:14px;height:12px;border-radius:3px;display:inline-block}
+        .tc-sw-ghost{background:var(--md-sys-color-primary-container);border-top:2px dashed var(--md-sys-color-primary)}
+        .tc-sw-done{background:var(--md-sys-color-primary)}
+        .tc-sw-good{background:var(--color-good,var(--md-sys-color-primary))}
+        </style>
+        <div class="tc-card">
+            <div class="tc-head">
+                <div class="tc-title">
+                    <i class="fa-solid fa-bullseye"></i> Target Bulan Ini
+                    <span class="tc-group">grup <?= htmlspecialchars($targetCard['nama_grup']) ?></span>
+                    <span class="tc-group"><?= htmlspecialchars($targetCard['bulan_label']) ?></span>
+                </div>
+                <div class="tc-overall">
+                    <b><?= htmlspecialchars(bi_format_target_number($targetCard['overall'])) ?>%</b>
+                    <span>capaian keseluruhan</span>
+                </div>
+            </div>
+            <div class="tc-bar"><span style="width:<?= (float) min(100, max(0, $targetCard['overall'])) ?>%"></span></div>
+
+            <div class="tc-rules">
+                <?php foreach ($targetCard['rules'] as $ruleKartu): ?>
+                <div class="tc-rule">
+                    <div class="tc-rule-head">
+                        <span class="tc-rule-label"><?= htmlspecialchars($ruleKartu['label']) ?></span>
+                        <span class="tc-rule-pct"><?= htmlspecialchars(bi_format_target_number($ruleKartu['percent'])) ?>%</span>
+                    </div>
+                    <div class="tc-meta">
+                        <?php if (trim((string) $ruleKartu['category']) !== ''): ?>
+                            <span class="tc-cat"><?= htmlspecialchars(strtoupper((string) $ruleKartu['category'])) ?></span>
+                        <?php endif; ?>
+                        <?php if ($ruleKartu['target_text'] !== ''): ?>
+                            <span>target <?= htmlspecialchars($ruleKartu['target_text']) ?></span>
+                        <?php endif; ?>
+                        <span>capaian <?= htmlspecialchars(bi_format_target_number($ruleKartu['done_raw'] ?? $ruleKartu['done'])) ?> dari <?= htmlspecialchars(bi_format_target_number($ruleKartu['possible'])) ?></span>
+                    </div>
+                    <div class="tc-chart">
+                        <?php foreach ($ruleKartu['bars'] as $bar): ?>
+                            <div class="tc-col<?= $bar['reached'] ? ' tc-reached' : '' ?>"
+                                 title="<?= htmlspecialchars('Periode ' . $bar['label'] . ': ' . bi_format_target_number($bar['done']) . ' / target ' . bi_format_target_number($bar['target'])) ?>">
+                                <span class="tc-ghost" style="height:<?= (float) $bar['ghost_pct'] ?>%"></span>
+                                <span class="tc-done" style="height:<?= (float) $bar['done_pct'] ?>%"></span>
+                            </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+                <?php endforeach; ?>
+            </div>
+
+            <div class="tc-legend">
+                <span><i class="tc-sw tc-sw-ghost"></i> Bayangan = besar target</span>
+                <span><i class="tc-sw tc-sw-done"></i> Isi = capaian</span>
+                <span><i class="tc-sw tc-sw-good"></i> Target tercapai</span>
+                <span>Arahkan kursor ke batang untuk melihat angka target &amp; capaian.</span>
+            </div>
+        </div>
+        <?php endif; ?>
 
         <div class="download-actions" style="flex-direction: column; align-items: flex-start; gap: 8px;">
             <div style="display: flex; justify-content: space-between; align-items: center; width: 100%; flex-wrap: wrap; gap: 12px;">

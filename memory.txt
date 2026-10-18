@@ -1,0 +1,262 @@
+================================================================================
+INGATAN EKSPOR — PROYEK git-ftp-amalanyumiyah (PWA amal yaumiyah)
+Tanggal: 18 Oct 2026
+Tujuan: handoff state sesi ini. Baca ini sebelum melanjutkan pekerjaan.
+================================================================================
+
+WORKING DIR: /home/rasyidk/vscode/git-ftp-amalanyumiyah  (repo git, branch main)
+
+--------------------------------------------------------------------------------
+TUJUAN UTAMA
+--------------------------------------------------------------------------------
+- PWA (manifest/icon) matang & bisa di-install; UI/admin: grup, mentee,
+  tempat sampah, status "tidak lagi mentoring", login admin, tool nama panggilan,
+  tombol salin WhatsApp, token GitHub, bug aksi panel admin.
+- Tugas 1-8: SELESAI & terverifikasi (sudah committed/deploy sebelumnya).
+- Tugas 9: SELESAI & terverifikasi — file `test/bi/target_settings.json`,
+  aturan target lintas grup dari admin.php, mesin target diekstrak ke
+  `test/target_engine.php` (byte-identical, php -l bersih).
+- Tugas 10 (SEDANG DIKERJAKAN): (a) fitur pencari di admin.php; (b) koneksi
+  OpenRouter mode free untuk menyusun target_settings.json dari deskripsi rules,
+  feedback kalau tidak tercover + buat GitHub issue; (c) kartu target di tiap
+  halaman penginputan mentee bila grup punya target_settings.json — SELESAI &
+  terverifikasi (CDP, /ftj/adli/); (d) kartu target tampilkan angka target jelas
+  di grafik ("bayangan target") — SELESAI & terverifikasi.
+- User terakhir: "lanjut jangan berhenti sebelum selesai", lalu "ekspor ingatan
+  ke memory.txt".
+
+--------------------------------------------------------------------------------
+KEADAAN test/admin.php (HARUS DIPERIKSA SEBELUM EDIT)
+--------------------------------------------------------------------------------
+- ukuran: perlu dicek ulang (wc -l). Terakhir diketahui 2909 baris.
+- ADA (sudah diterapkan):
+  * blok aksi PHP `or_save_conn`, `or_test_conn`, `or_generate` di sekitar
+    `if ($action === 'or_save_conn')` — baris ~1373.
+  * `doAction()` ada 3 referensi (baris 1373-dasar); belum dikonfirmasi apakah
+    `el.dataset.extra` (data-extra) sudah diterapkan — cek:
+      grep -n 'el.dataset.extra\|data-extra' test/admin.php
+  * `// ======================= AUTENTIKASI ADMIN =======================` baris 773.
+  * `<ul class="msgs" id="msgs">` baris 2122.
+  * `// ===================== Editor target_settings.json =====================`
+    baris 2493.
+- BELUM ADA (masih harus diterapkan — ini sisa pekerjaan):
+  * Engine OpenRouter (AI OPENROUTER): konstanta AI_DIR/AI_KEY_FILE/AI_GH_TOKEN_F/
+    AI_ISSUE_REPO_F/AI_ISSUE_REPO/AI_MODELS_CACHE/AI_API; fungsi
+    ai_secret_read/write, ai_issue_repo, ai_http, ai_fetch_models, ai_free_models,
+    ai_extract_json, ai_validate_targets, ai_system_prompt, ai_chat, ai_report_issue,
+    ai_generate. Ditempatkan SEBELUM `AUTENTIKASI ADMIN`.
+  * Panel `#or-panel` HTML (kolom Simpan koneksi / Uji koneksi / Daftar file repo /
+    Hapus kunci) setelah "Manifest PWA &rarr; GitHub".
+  * Panel pencari `#adm-find` (input + ul + info + style `.adm-find*`) setelah
+    `<ul class="msgs">`.
+  * JS pencari (indeks DOM, render hasil, `/` fokus, `Esc` bersihkan,
+    highlight `.adm-find-hit`) sebelum Editor target_settings.json.
+  * Blok AI di dalam `build()` (textarea.tgt-ai-desc, tombol Susun dengan AI,
+    div.tgt-ai-out, handler POST action=or_generate, isi editor, auto-klik
+    Simpan target dengan confirm, sessionStorage['adm-ai-note'], CSS .tgt-ai*).
+  * Pemulihan sessionStorage['adm-ai-note'] di akhir script utama.
+  * `test/_ai/` ditambahkan ke `.gitignore` dan `.git-ftp-ignore`.
+
+--------------------------------------------------------------------------------
+FILE TERKAIT & PATH PENTING
+--------------------------------------------------------------------------------
+- test/admin.php — admin panel + AI + pencari (yang sedang diedit)
+- test/target_engine.php — mesin target bersama (30+ fungsi, SELESAI, byte-identical)
+- test/bi.php — require_once target_engine.php (halaman analisis, via require)
+- test/index.php — halaman penginputan mentee; kartu target tc-* SELESAI
+- ftj/target_settings.json — 9 aturan, semua 6 mode (bahan uji utama)
+- test/bi/target_settings.json — aturan lintas grup (Tugas 9)
+- .gitignore, .git-ftp-ignore — butuh entri `test/_ai/`
+- create-admin.sh — buat admin.json (hanya admin.php yang dilindungi)
+- pull.sh / push.sh / run.sh — alur FTP/Git; push.sh commit+push GitHub+FTP
+- create-openrouter-conn.sh — root, 0 byte, tidak dilacak git, tidak di-ignore,
+  BELUM dijelaskan ke user, jangan dihapus.
+- test/_manifest/.token — TIDAK ada di disk (fallback token GitHub issue)
+- test/_ai/ (mode 600) — openrouter_key, github_token, issue_repo, models_cache.json
+  (cache 6 jam); di-.gitignore + .git-ftp-ignore (tidak ke GitHub & FTP)
+
+--------------------------------------------------------------------------------
+STRUKTUR DATA & KONSTANTA
+--------------------------------------------------------------------------------
+- target_settings.json: {group,title,greeting,intro,closing,tag,rules:[
+   {category,label,target,period,target_count,mode,
+    match_value?,logic?,rakaat_per_check?,threshold?,pages_per_sheet?,
+    source_dataset?,detail,data_keys[]}]}
+  periode: day/week/month; mode: 6 mode.
+- Grup dari root (kecuali test, .git, .DEPRECATED, assets); mentee = subfolder
+  grup; mentor via .THIS_IS_MENTOR; sampah .DEPRECATED/<grup>/<mentee>/;
+  .OUT = .DEPRECATED/.OUT/<mentee>/.
+- Manifest per mentee & grup → repo krasyid822/for-manifest-json-pwa;
+  $manifestPath → raw URL; token PAT lokal test/_manifest/.token (tidak ada).
+- Kredensial FTP via ~/.netrc (tanpa entri api.github.com).
+- admin.json ke FTP, tidak ke GitHub.
+
+--------------------------------------------------------------------------------
+SERVER UJI & PERINTAH PENTING
+--------------------------------------------------------------------------------
+- Fresh copy + server: cd /tmp/opencode/k1 (atau fresh copy);
+  php -d opcache.revalidate_freq=0 -S 127.0.0.1:<port> -t .
+  (port 9420 untuk k1; selalu pakai revalidate_freq=0)
+- Lint: php -l test/admin.php ; ./run.sh --lint
+- jangan: `pkill -f "127.0.0.1:<port>"` (bunuh shell sendiri); pakai
+  `fuser -k <port>/tcp`; bunuh Chromium: `pkill -f "chrome-t[8]"`;
+  selalu `cd` ke direktori uji di tiap panggilan.
+- FTP: ftp://ftpupload.net/amalanyaumiyah.xo.je/htdocs/, user if0_37577629,
+  server lambat (~4 dtk/LIST). Jangan hapus file data .json di server.
+- Tarik perubahan FTP: --changed-only + --no-commit.
+- OpenRouter: cURL tersedia, outbound HTTPS ke openrouter.ai berfungsi
+  (200, ~788 KB, 0,53 s). 19 model gratis (dari 470), 16 bersuffix :free.
+  Maks 4 model dicoba; response_format json_object lalu tanpa bila error.
+- Daftar model tersimpan: /tmp/or-models.json.
+
+--------------------------------------------------------------------------------
+NEXT MOVE (urutan)
+--------------------------------------------------------------------------------
+1. Verifikasi state test/admin.php (grep penanda di atas).
+2. Sisipkan engine OpenRouter sebelum AUTENTIKASI ADMIN (baris 773).
+3. Sisipkan panel pencari #adm-find + JS setelah <ul class="msgs"> (2122).
+4. Sisipkan blok AI di build() sebelum tgt-actions (sekitar baris 2493+).
+5. Tambah pemulihan sessionStorage['adm-ai-note'] di akhir script.
+6. Tambah CSS .tgt-ai* (di style blok yang sama dengan .adm-find).
+7. Tambah `test/_ai/` ke .gitignore dan .git-ftp-ignore.
+8. Verifikasi: php -l test/admin.php ; ./run.sh --lint.
+9. Uji: fresh copy + server, login, or_test_conn tanpa kunci (pesan jelas),
+   or_generate dengan kunci nyata (jika user berikan), pencari via CDP
+   (tanpa error JS), jalur coverable=false (feedback + "Belum ada token GitHub",
+   bukan fatal).
+10. Laporkan Tugas 10 (a-d) ke user; minta kunci OpenRouter & token GitHub
+    (Issues: Write) untuk uji nyata; tanyakan create-openrouter-conn.sh.
+11. User jalankan ./push.sh. Belum di-commit: .gitignore, pull.sh, readme.md,
+    test/admin.php, test/bi.php, test/target_engine.php (baru), test/index.php;
+    untracked: bph/, target_settings_bph.txt, create-openrouter-conn.sh.
+12. Peringatkan: test/admin.json format lama di server FTP harus dihapus lalu
+    jalankan ulang ./create-admin.sh.
+13. (Terbuka) bersihkan manifest lokal basi test/_manifest/ atau biarkan
+    terpangkas otomatis.
+
+--------------------------------------------------------------------------------
+NOTES PENTING
+--------------------------------------------------------------------------------
+- Shell kadang output-nya acak/kosong untuk pola kompleks; gunakan pola
+  sederhana atau read/grep bawaan.
+- Buat worktree dengan opencode.worktree_create jika perlu isolasi.
+- Jangan hapus create-openrouter-conn.sh.
+- Jangan commit test/admin.json & test/_ai/ ke GitHub/FTP.
+================================================================================
+================================================================================
+STATUS TERKINI (18 Oct 2026, setelah eksport memory awal)
+================================================================================
+SUDAH DITERAPKAN ke test/admin.php:
+  * Engine OpenRouter (13 fungsi ai_*: secret read/write mode 600, fetch models
+    + cache 6 jam, filter gratis :free diurutkan konteks, extract JSON,
+    validate_targets (6 mode, 3 periode), system prompt, chat dengan maks 4
+    model + response_format fallback, report_issue ke GitHub API,
+    ai_generate). Tempat: sebelum AUTENTIKASI ADMIN.
+  * doAction() mendukung data-extra="id:field,..." (banyak isian).
+  * Panel #or-panel (Simpan koneksi / Uji koneksi / Hapus kunci) setelah
+    seksi Manifest GitHub.
+  * Panel #adm-find + CSS + JS (indeks DOM grup/mentee/aturan/sampah, `/`
+    fokus, `Esc` bersih, highlight .adm-find-hit).
+  * Blok "Susun dengan AI" di dalam build() tiap details.tgt (grup & lintas
+    grup): konfirmasi timpa, isi editor, auto-klik Simpan target,
+    sessionStorage['adm-ai-note'] setelah reload, CSS .tgt-ai*.
+  * .gitignore dan .git-ftp-ignore: tambah test/_ai/.
+
+VERIFIKASI SUDAH BERHASIL:
+  * php -l semua file + ./run.sh --lint: 132 file PHP, tidak ada error.
+  * Unit test engine AI: validasi, ekstraksi JSON, pengurutan model gratis,
+    rahasia mode 600 — benar.
+  * OpenRouter nyata: 471 model, 19 gratis, respons ~0,5s (outbound HTTPS OK).
+  * Server uji nyala di 127.0.0.1:9420; endpoint or_test_conn/or_generate
+    mengembalikan JSON "Sesi berakhir..." saat belum login (tidak fatal).
+  * Tugas 10(c)+(d) kartu target sudah selesai & diverifikasi CDP sebelumnya.
+
+BELUM BISA DITERUSKAN (butuh input user):
+  * Login admin (username/password dari create-admin.sh) — uji UI panels/
+    pencari via browser/CDP.
+  * OpenRouter API key — uji or_generate nyata.
+  * GitHub token (Issues: Write) + issue_repo — uji buat issue saat
+    coverable=false (atau sengaja kosong untuk memastikan pesan "Belum ada
+    token GitHub" muncul, bukan fatal).
+  * create-openrouter-conn.sh (0 byte, root, tidak di-track) — biarkan atau
+    hapus?
+
+SESUDAH PUSH:
+  * Belum di-commit: .gitignore, .git-ftp-ignore, pull.sh, readme.md,
+    test/admin.php, test/bi.php, test/target_engine.php (baru), test/index.php;
+    untracked: bph/, target_settings_bph.txt, create-openrouter-conn.sh,
+    memory.txt.
+  * Peringatkan: test/admin.json format lama di server FTP harus dihapus lalu
+    jalankan ulang ./create-admin.sh.
+  * (Terbuka) bersihkan manifest lokal basi test/_manifest/ atau biarkan
+    terpangkas otomatis.
+
+================================================================================
+STATUS TERKINI (18 Oct 2026 — GitHub Issue #1 diselesaikan)
+================================================================================
+GITHUB ISSUE #1: "Hasil AI target_settings.json gagal validasi struktur (OpenRouter)"
+  URL: https://github.com/krasyid822/git-ftp-amalanyumiyah/issues/1
+  Penyebab: Model OpenRouter mengeluarkan mode "numeric" dengan match_value (bukan
+  threshold) untuk Sholat Dhuha & Sholat Witir. Validator lama menolak karena
+  mengharuskan threshold.
+  PERBAIKAN (test/admin.php):
+    1. ai_validate_targets (baris 932-933): mode numeric sekarang terima match_value
+       sebagai alternatif threshold.
+    2. ai_generate (baris 1083-1091): normalisasi otomatis match_value->threshold
+       untuk mode numeric sebelum validasi.
+  HASIL: Skenario Issue #1 (Sholat Dhuha numeric match_value=2, Sholat Witir
+  numeric match_value=3) sekarang LOLOS validasi, tidak lagi membuat issue baru.
+  Unit test (test_fix.php): KEDUANYA LOLOS.
+  php -l test/admin.php: BERSIH.
+  BELUM: menutup issue #1 di GitHub (butuh GitHub token Issues: Write dari user).
+
+================================================================================
+
+================================================================================
+STATUS TERKINI (18 Oct 2026 — GitHub Issue #1 diselesaikan)
+================================================================================
+GITHUB ISSUE #1: "Hasil AI target_settings.json gagal validasi struktur (OpenRouter)"
+  URL: https://github.com/krasyid822/git-ftp-amalanyumiyah/issues/1
+  Penyebab: Model OpenRouter mengeluarkan mode "numeric" dengan match_value (bukan
+  threshold) untuk Sholat Dhuha & Sholat Witir. Validator lama menolak karena
+  mengharuskan threshold.
+  PERBAIKAN (test/admin.php):
+    1. ai_validate_targets (baris 932-933): mode numeric sekarang terima match_value
+       sebagai alternatif threshold.
+    2. ai_generate (baris 1083-1091): normalisasi otomatis match_value->threshold
+       untuk mode numeric sebelum validasi.
+  HASIL: Skenario Issue #1 (Sholat Dhuha numeric match_value=2, Sholat Witir
+  numeric match_value=3) sekarang LOLOS validasi, tidak lagi membuat issue baru.
+  Unit test (test_fix.php): KEDUANYA LOLOS.
+  php -l test/admin.php: BERSIH.
+  BELUM: menutup issue #1 di GitHub (butuh GitHub token Issues: Write dari user).
+
+================================================================================
+STATUS TERKINI (18 Oct 2026 — Stub redirect + Ekspor target_settings)
+================================================================================
+STUB REDIRECT SUPPORT (test/index.php + ftj/rasyid/index.php):
+  * ftj/rasyid/index.php redirect ke test/index.php?mentee=rasyid&group=ftj
+    (satu orang di banyak grup, tidak ada data_amalan.json di folder mentee).
+  * test/index.php deteksi parameter ?mentee=&group=, set $stubGroup untuk
+    kartu target, tidak menciptakan data_amalan.json di folder mentee
+    (bacaDataAmalan tidak membuat file karena $dataFile tidak di-set ke path
+    yang tidak ada).
+  * Kartu target muncul untuk ftj/rasyid via stub redirect (tc-card = 2 terdeteksi
+    via CDP/curl), menggunakan ftj/target_settings.json.
+  * file ftj/rasyid/data_amalan.json TIDAK dibuat (baik).
+
+EKSPOR target_settings.json (test/admin.php):
+  * Di tgt-actions tiap editor target (grup + lintas grup): tombol "Ekspor MD"
+    dan "Ekspor TXT" menghasilkan file unduhan dari data rules saat ini.
+  * MD: tabel kategori/label/target/periode/mode/target_count.
+  * TXT: daftar aturan dengan detail match_value/threshold/data_keys.
+  * Nama file: <group>.md / <group>.txt.
+
+BELUM DI-COMMIT (siap push.sh):
+  .gitignore, .git-ftp-ignore, pull.sh, readme.md, test/admin.php, test/bi.php,
+  test/index.php, test/target_engine.php (baru), ftj/rasyid/index.php (diubah),
+  bph/, target_settings_bph.txt, create-openrouter-conn.sh, memory.txt.
+PERINGATAN: test/admin.json format lama di server FTP harus dihapus lalu
+jalankan ulang ./create-admin.sh.
+
+================================================================================

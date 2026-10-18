@@ -79,7 +79,7 @@ export function openPopover(originalCell, key, day, dateStr, labelName) {
     const currentValue = getCurrentFormValue(key);
     let bodyHtml = '';
     
-    if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+    if (['dhuha', 'tahajud', 'witir', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
         const options = [
             { val: '✓', label: '✓ Telah Dilakukan', class: 'status-good', icon: 'fa-circle-check' },
             { val: '', label: '-- Belum Dilakukan', class: 'status-empty', icon: 'fa-circle-xmark' }
@@ -430,7 +430,7 @@ export function getRawatibDetailMap() {
 
 export function getCurrentFormValue(key) {
     const form = document.getElementById('form-amalan');
-    if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+    if (['dhuha', 'tahajud', 'witir', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
         return form.elements[key] && form.elements[key].checked ? '✓' : '';
     }
     if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
@@ -514,7 +514,7 @@ export function saveCellData(dateStr, key, value, originalCell, shouldClose = tr
 
     if (['subuh', 'dzuhur', 'ashar', 'maghrib', 'isya'].includes(key)) {
         if (window.setPrayerSliderState) window.setPrayerSliderState(key, value);
-    } else if (['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
+    } else if (['dhuha', 'tahajud', 'witir', 'senin_kamis', 'ayamul_bidh'].includes(key)) {
         const cb = form.elements[key];
         if (cb) {
             cb.checked = (value === '✓');
