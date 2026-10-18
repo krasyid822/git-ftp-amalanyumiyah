@@ -51,6 +51,9 @@ if (!in_array($requestPath, $allowedPaths, true)) {
 // halaman penginputan mentee (test/index.php).
 require_once __DIR__ . '/target_engine.php';
 
+// Logika gembok puasa sunnah (hari bergembok tidak dihitung sebagai possible).
+require_once __DIR__ . '/puasa_sunnah.php';
+
 function bi_h(mixed $value): string
 {
 	return htmlspecialchars((string) $value, ENT_QUOTES, 'UTF-8');
@@ -369,7 +372,7 @@ function bi_parse_rawatib_day(array $monthData, int $day, int $rawatibDetailCoun
 	];
 }
 
-function bi_analyze_month(array $monthData, int $daysInMonth, array $daftar_amalan, int $rawatibDetailCount): array
+function bi_analyze_month(array $monthData, int $daysInMonth, array $daftar_amalan, int $rawatibDetailCount, string $selectedMonth = ''): array
 {
 	$categoryBreakdown = [];
 	foreach ($daftar_amalan as $categoryName => $items) {
@@ -400,11 +403,26 @@ function bi_analyze_month(array $monthData, int $daysInMonth, array $daftar_amal
 					$rawatibDone += $done;
 					$rawatibPossible += $possible;
 				} else {
+					// Hari bergembok (Senin/Kamis atau Ayyamul Bidh di luar
+					// jadwal) tidak mungkin diisi, jadi jangan ikut dihitung
+					// sebagai "possible" maupun "done".
+					if ($selectedMonth !== '' && ($key === 'senin_kamis' || $key === 'ayamul_bidh')) {
+						$dateStr = $selectedMonth . '-' . sprintf('%02d', $day);
+						if (bi_puasa_key_locked($key, $dateStr)) {
+							continue;
+						}
+					}
+
 					$value = $monthData[$key][$day] ?? '';
 					$possible = 1;
 					if ($key === 'istighfar') {
-						$done = (is_numeric($value) && (int) $value > 0) ? 1 : 0;
-						if ($done) {
+						// Batas ideal istighfar = 2 poin/hari (200 kali):
+						// 100 = 1 poin, 200 ke atas = 2 poin (maksimal).
+						$possible = 2;
+						$done = (is_numeric($value) && (float) $value > 0)
+							? min((float) $value / 100, 2.0)
+							: 0;
+						if ($done > 0) {
 							$istighfarTotal += (int) $value;
 							$istighfarDays++;
 							$dayHasData = true;
@@ -644,7 +662,7 @@ foreach ($analysisParticipants as $participant) {
 		$monthData = [];
 	}
 
-	$metrics = bi_analyze_month($monthData, $daysInMonth, $daftar_amalan, $participant['rawatib_detail_count']);
+	$metrics = bi_analyze_month($monthData, $daysInMonth, $daftar_amalan, $participant['rawatib_detail_count'], $selectedMonth);
 	$targetMetrics = $hasTargetRules ? bi_compute_target_summary($monthData, $daysInMonth, $targetRules, $selectedMonth) : [];
 
 	$participants[] = [

@@ -21,9 +21,11 @@ data_amalan.json
 *data_amalan.json
 hijri_cache.json
 *hijri_cache.json
-test/_manifest/*
-test/_manifest/.*
-test/_ai/
+# CATATAN: test/_manifest/ dan test/_ai/ SENGAJA TIDAK dikecualikan di sini.
+# Keduanya tetap di-ignore git (tidak ke GitHub), tetapi HARUS ter-upload ke
+# server FTP lewat .git-ftp-include (lihat push.sh) supaya fitur AI & manifest
+# di server berfungsi. Sebelumnya keduanya ada di daftar ini (tidak pernah
+# sampai ke server); kini sengaja di-push.
 
 # Kredensial
 .netrc

@@ -7,6 +7,9 @@ if (!isset($dataFile)) {
     $dataFile = __DIR__ . '/data_amalan.json';
 }
 
+// Logika gembok puasa sunnah (satu sumber dengan index.php & bi.php).
+require_once __DIR__ . '/puasa_sunnah.php';
+
 // Pastikan struktur ini SAMA PERSIS dengan di index.php
 $daftar_amalan = [
     'SHOLAT WAJIB' => [
@@ -70,10 +73,12 @@ $total_possible = 0;
 
 // Per-jenis tally (non-rawatib keys from daftar_amalan)
 $per_type_done = [];
+$per_type_possible = [];
 foreach ($daftar_amalan as $cat => $sub) {
     foreach ($sub as $key => $label) {
         if ($key === 'rawatib') continue; // handle separately
         $per_type_done[$key] = 0;
+        $per_type_possible[$key] = 0;
     }
 }
 
@@ -83,13 +88,29 @@ for ($i = 1; $i <= $jumlah_hari; $i++) {
     foreach ($daftar_amalan as $cat => $sub) {
         foreach ($sub as $key => $label) {
             if ($key === 'rawatib') continue;
-            $total_possible += 1;
+
+            // Hari bergembok (Senin/Kamis / Ayyamul Bidh di luar jadwal) tidak
+            // mungkin diisi -> jangan dihitung sebagai "possible".
+            if ($key === 'senin_kamis' || $key === 'ayamul_bidh') {
+                $dateStr = $bulan_diminta . '-' . sprintf('%02d', $i);
+                if (bi_puasa_key_locked($key, $dateStr)) {
+                    continue;
+                }
+            }
+
             $value = $dataBulanIni[$key][$i] ?? '';
+            // Batas "possible": istighfar sampai 2 poin/hari (200 kali),
+            // amalan lain 1 per hari.
+            $possibleForKey = ($key == 'istighfar') ? 2 : 1;
+            $total_possible += $possibleForKey;
+            $per_type_possible[$key] += $possibleForKey;
             $done = 0;
             if (in_array($key, ['dhuha', 'tahajud', 'senin_kamis', 'ayamul_bidh', 'sedekah', 'almatsurat_pagi', 'almatsurat_petang'])) {
                 $done = ($value == '✓') ? 1 : 0;
             } elseif ($key == 'istighfar') {
-                $done = (is_numeric($value) && $value > 0) ? 1 : 0;
+                // Batas ideal 2 poin/hari: 100 = 1 poin, 200 ke atas = 2 poin
+                // (maksimal). Konsisten dengan BI.
+                $done = (is_numeric($value) && $value > 0) ? min((float) $value / 100, 2.0) : 0;
             } elseif ($key == 'tilawah') {
                 $done = ($value !== '') ? 1 : 0;
             } else {
@@ -121,7 +142,8 @@ for ($i = 1; $i <= $jumlah_hari; $i++) {
 // Persentase keterlaksanaan per jenis (hitung berdasarkan jumlah hari)
 $per_type_percent = [];
 foreach ($per_type_done as $key => $doneCount) {
-    $per_type_percent[$key] = $jumlah_hari > 0 ? round(($doneCount / $jumlah_hari) * 100, 1) : 0;
+    $possibleForKey = $per_type_possible[$key] ?? 0;
+    $per_type_percent[$key] = $possibleForKey > 0 ? round(($doneCount / $possibleForKey) * 100, 1) : 0;
 }
 
 // Rawatib totals: total done and total possible

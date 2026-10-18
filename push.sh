@@ -119,32 +119,47 @@ do_ftp() {
     ok "FTP tersinkron."
 
     # git-ftp berhenti lebih awal ("Everything up-to-date") bila tidak ada commit
-    # baru, sehingga test/admin.json (via .git-ftp-include) belum tentu ter-upload.
+    # baru, sehingga berkas dari .git-ftp-include (admin.json + _manifest/_ai)
+    # belum tentu ter-upload.
     local new_log
     new_log="$(tail -n +"$((log_before + 1))" "$LOGFILE" 2>/dev/null || true)"
-    ensure_admin_cred_uploaded "$new_log"
+    ensure_included_uploaded "$new_log"
 }
 
-# Pastikan test/admin.json benar-benar ada di server, walau tidak ada commit baru.
-ensure_admin_cred_uploaded() {
+# Pastikan berkas dari .git-ftp-include (kredensial admin, token manifest, dan
+# kunci AI) benar-benar ada di server, walau tidak ada commit baru.
+ensure_included_uploaded() {
     local new_log="$1"
-    local cred="test/admin.json"
     local mark=".git-ftp-admin.sha"
 
-    [ -f "$cred" ] || return 0
+    # Kumpulkan seluruh berkas yang selalu harus ada di server.
+    local files=()
+    local f
+    [ -f test/admin.json ] && files+=("test/admin.json")
+    local dir
+    for dir in test/_manifest test/_ai; do
+        [ -d "$dir" ] || continue
+        while IFS= read -r -d '' f; do
+            files+=("$f")
+        done < <(find "$dir" -type f -print0 2>/dev/null)
+    done
+    [ "${#files[@]}" -gt 0 ] || return 0
 
+    # Sidik jari isi (hash + path) agar perubahan apa pun terdeteksi.
     local want have
-    want="$(sha1sum "$cred" | awk '{print $1}')"
+    want="$(for f in "${files[@]}"; do
+        printf '%s %s\n' "$(sha1sum "$f" | awk '{print $1}')" "$f"
+    done | sort | sha1sum | awk '{print $1}')"
     have="$(cat "$mark" 2>/dev/null || true)"
     [ "$want" = "$have" ] && return 0
 
     if printf '%s' "$new_log" | grep -qi 'up-to-date'; then
-        warn "Kredensial admin berubah, tetapi tidak ada commit baru."
-        warn "Upload ulang (--all) agar test/admin.json ikut terkirim..."
+        warn "Kredensial/berkas rahasia berubah, tetapi tidak ada commit baru."
+        warn "Upload ulang (--all) agar berkas dari .git-ftp-include ikut terkirim..."
         run git ftp push --all
     fi
     printf '%s\n' "$want" > "$mark"
-    ok "test/admin.json terkirim ke server FTP."
+    ok "Kredensial & berkas rahasia terkirim ke server FTP."
 }
 
 case "${1:-all}" in

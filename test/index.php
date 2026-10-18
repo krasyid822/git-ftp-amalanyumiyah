@@ -186,6 +186,8 @@ const RAWATIB_DETAIL_KEYS = [
     'rawatib_isya_b',
 ];
 
+// Logika gembok puasa sunnah dipakai bersama index.php, bi.php, dan download.php.
+require_once __DIR__ . '/puasa_sunnah.php';
 
 // --- AJAX HANDLER ---
 // Bagian ini akan menangani request yang datang dari JavaScript (fetch)
@@ -573,68 +575,10 @@ function getAyyamulBidhInfoFromClass($date = null) {
     ];
 }
 
-// --- FUNGSI PEMBANTU UNTUK CEK HARI PUASA SUNNAH ---
-function bi_is_senin_kamis($dateStr) {
-    $dayOfWeek = date('N', strtotime($dateStr)); // 1 for Monday, 4 for Thursday
-    return ($dayOfWeek == 1 || $dayOfWeek == 4);
-}
-
-function bi_is_tasyrik($dateStr) {
-    require_once __DIR__ . '/AyamulBidhCalc.php';
-    $calculator = new AyyamulBidhCalculator();
-    $calculator->setAdjustment(0);
-    
-    $date = new DateTime($dateStr);
-    
-    // Pre-check lokal secara cepat untuk menyaring tanggal yang tidak mungkin
-    $localHijri = $calculator->gregorianToHijriLegacy($date);
-    $isDzulhijjahCandidate = ($localHijri['month'] == 12 && $localHijri['day'] >= 8 && $localHijri['day'] <= 15);
-    $isShawwalCandidate = ($localHijri['month'] == 10 && ($localHijri['day'] >= 29 || $localHijri['day'] <= 3));
-    
-    if (!$isDzulhijjahCandidate && !$isShawwalCandidate) {
-        return false;
-    }
-    
-    $hijri = $calculator->gregorianToHijri($date);
-    
-    // Idul Adha (10 Dzulhijjah) & Hari Tasyrik (11, 12, 13 Dzulhijjah)
-    if ($hijri['month'] == 12 && ($hijri['day'] == 10 || $hijri['day'] == 11 || $hijri['day'] == 12 || $hijri['day'] == 13)) {
-        return true;
-    }
-    
-    // Idul Fitri (1 Shawwal)
-    if ($hijri['month'] == 10 && $hijri['day'] == 1) {
-        return true;
-    }
-    
-    return false;
-}
-
-function bi_is_ayyamul_bidh($dateStr) {
-    require_once __DIR__ . '/AyamulBidhCalc.php';
-    $calculator = new AyyamulBidhCalculator();
-    $calculator->setAdjustment(0);
-    
-    $date = new DateTime($dateStr);
-    
-    // Pre-check lokal secara cepat untuk menyaring tanggal yang tidak mungkin
-    $localHijri = $calculator->gregorianToHijriLegacy($date);
-    if ($localHijri['month'] == 12) {
-        return false;
-    }
-    if ($localHijri['day'] < 11 || $localHijri['day'] > 17) {
-        return false;
-    }
-    
-    $hijri = $calculator->gregorianToHijri($date);
-    
-    // Pastikan bukan bulan Dzulhijjah (12)
-    if ($hijri['month'] == 12) {
-        return false;
-    }
-    
-    return ($hijri['day'] == 13 || $hijri['day'] == 14 || $hijri['day'] == 15);
-}
+// --- FUNGSI PEMBANTU PUASA SUNNAH ---
+// Definisi bi_is_senin_kamis()/bi_is_tasyrik()/bi_is_ayyamul_bidh() kini ada di
+// test/puasa_sunnah.php (di-require di atas) agar dipakai bersama oleh
+// bi.php & download.php — satu sumber kebenaran.
 
 $ayyamul_bidh_info = getAyyamulBidhInfoFromClass(null);
 

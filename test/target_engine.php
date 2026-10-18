@@ -8,6 +8,10 @@
 // bi_normalize_quran_key di-guard karena test/index.php punya definisi sendiri
 // (isinya identik), sehingga tidak pernah bentrok "Cannot redeclare".
 
+// Butuh logika gembok puasa sunnah (bi_puasa_key_locked) agar kunci yang
+// bergembok tidak dihitung dalam aturan target.
+require_once __DIR__ . '/puasa_sunnah.php';
+
 function bi_read_json(string $file): array
 {
 	if (!is_file($file)) {
@@ -290,11 +294,9 @@ function bi_target_count(array $rule, float $default = 1): float
 
 function bi_target_required_units(array $rule): float
 {
-	$mode = strtolower((string) ($rule['mode'] ?? 'day_presence'));
-	if ($mode === 'numeric') {
-		return 1.0;
-	}
-
+	// target_count = jumlah unit (poin) yang dibutuhkan per periode. Untuk mode
+	// 'numeric' ini berarti poin maksimum per periode (mis. istighfar: 100 kali
+	// = 1 poin, target_count 2 = maksimal 2 poin/hari).
 	return max(1.0, bi_target_count($rule, 1.0));
 }
 
@@ -434,9 +436,17 @@ function bi_target_numeric_units(array $monthData, array $rule, int $day): float
 	}
 
 	$value = $monthData[$key][$day] ?? null;
-	$threshold = isset($rule['threshold']) && is_numeric($rule['threshold']) ? (float) $rule['threshold'] : bi_target_count($rule, 1.0);
+	if (!is_numeric($value) || (float) $value <= 0) {
+		return 0.0;
+	}
 
-	return is_numeric($value) && (float) $value >= $threshold ? 1.0 : 0.0;
+	$threshold = isset($rule['threshold']) && is_numeric($rule['threshold']) && (float) $rule['threshold'] > 0
+		? (float) $rule['threshold']
+		: 1.0;
+	$maxUnits = max(1.0, bi_target_count($rule, 1.0));
+
+	// Nilai dibagi threshold = poin (mis. 150/100 = 1,5), dibatasi maksimum.
+	return min((float) $value / $threshold, $maxUnits);
 }
 
 function bi_target_quran_sheet_units(array $monthData, array $rule, int $day): float
@@ -453,9 +463,12 @@ function bi_target_quran_sheet_units(array $monthData, array $rule, int $day): f
 	return $pages / $pagesPerSheet;
 }
 
-function bi_target_rule_units_for_day(array $monthData, array $rule, int $day): float
+function bi_target_rule_units_for_day(array $monthData, array $rule, int $day, string $selectedMonth = ''): float
 {
 	$mode = strtolower((string) ($rule['mode'] ?? 'day_presence'));
+
+	// Kunci puasa yang sedang bergembok pada tanggal ini tidak ikut dihitung.
+	$rule = bi_target_rule_with_effective_keys($rule, $day, $selectedMonth);
 
 	if ($mode === 'value_count') {
 		return bi_target_value_count_units($monthData, $rule, $day);
@@ -480,9 +493,67 @@ function bi_target_rule_units_for_day(array $monthData, array $rule, int $day): 
 	return bi_target_presence_units($monthData, $rule, $day);
 }
 
-function bi_target_rule_matches_day(array $monthData, array $rule, int $day): bool
+function bi_target_rule_matches_day(array $monthData, array $rule, int $day, string $selectedMonth = ''): bool
 {
-	return bi_target_rule_units_for_day($monthData, $rule, $day) >= bi_target_required_units($rule);
+	return bi_target_rule_units_for_day($monthData, $rule, $day, $selectedMonth) >= bi_target_required_units($rule);
+}
+
+// --- Gembok puasa sunnah di mesin target ------------------------------------
+// Kunci puasa (senin_kamis/ayamul_bidh) yang sedang bergembok pada tanggal
+// tertentu tidak dihitung sama sekali: nilainya diabaikan dan harinya tidak
+// menambah "possible". Butuh test/puasa_sunnah.php.
+
+function bi_target_rule_key_locked(string $key, int $day, string $selectedMonth): bool
+{
+	if ($selectedMonth === '' || !preg_match('/^\d{4}-\d{2}$/', $selectedMonth)) {
+		return false;
+	}
+
+	return bi_puasa_key_locked($key, $selectedMonth . '-' . sprintf('%02d', $day));
+}
+
+function bi_target_rule_with_effective_keys(array $rule, int $day, string $selectedMonth): array
+{
+	if ($selectedMonth === '') {
+		return $rule;
+	}
+
+	$keys = bi_target_rule_keys($rule);
+	if ($keys === []) {
+		return $rule;
+	}
+
+	$effective = [];
+	foreach ($keys as $key) {
+		if (!bi_target_rule_key_locked($key, $day, $selectedMonth)) {
+			$effective[] = $key;
+		}
+	}
+
+	$rule['data_keys'] = $effective;
+	unset($rule['keys']);
+
+	return $rule;
+}
+
+function bi_target_rule_day_applicable(array $rule, int $day, string $selectedMonth): bool
+{
+	if ($selectedMonth === '') {
+		return true;
+	}
+
+	$keys = bi_target_rule_keys($rule);
+	if ($keys === []) {
+		return true;
+	}
+
+	foreach ($keys as $key) {
+		if (!bi_target_rule_key_locked($key, $day, $selectedMonth)) {
+			return true;
+		}
+	}
+
+	return false;
 }
 
 function bi_compute_target_rule_progress(array $monthData, int $daysInMonth, array $rule, string $selectedMonth = ''): array
@@ -494,14 +565,26 @@ function bi_compute_target_rule_progress(array $monthData, int $daysInMonth, arr
 	$doneRaw = 0.0;
 	$possible = 0.0;
 	$periodsDone = 0;
+	$periodsPossible = 0;
 
 	foreach ($periods as $days) {
 		$periodRequiredUnits = bi_target_required_units_for_period($rule, $days, $requiredUnits, $period);
 		$periodUnits = 0.0;
+		$applicableDays = 0;
 		foreach ($days as $day) {
-			$periodUnits += bi_target_rule_units_for_day($monthData, $rule, $day);
+			if (!bi_target_rule_day_applicable($rule, $day, $selectedMonth)) {
+				continue;
+			}
+			$applicableDays++;
+			$periodUnits += bi_target_rule_units_for_day($monthData, $rule, $day, $selectedMonth);
 		}
 
+		// Periode yang seluruh harinya bergembok tidak dihitung.
+		if ($applicableDays === 0) {
+			continue;
+		}
+
+		$periodsPossible++;
 		$doneRaw += $periodUnits;
 		$done += min($periodUnits, $periodRequiredUnits);
 		$possible += $periodRequiredUnits;
@@ -516,7 +599,7 @@ function bi_compute_target_rule_progress(array $monthData, int $daysInMonth, arr
 		'possible' => $possible,
 		'percent' => $possible > 0 ? round(($done / $possible) * 100, 1) : 0,
 		'periods_done' => $periodsDone,
-		'periods_possible' => count($periods),
+		'periods_possible' => $periodsPossible,
 	];
 }
 
@@ -539,9 +622,20 @@ function bi_target_rule_period_breakdown(array $monthData, int $daysInMonth, arr
 	foreach ($periods as $key => $days) {
 		$target = bi_target_required_units_for_period($rule, $days, $requiredUnits, $period);
 		$done = 0.0;
+		$applicableDays = 0;
 		foreach ($days as $day) {
-			$done += bi_target_rule_units_for_day($monthData, $rule, $day);
+			if (!bi_target_rule_day_applicable($rule, $day, $selectedMonth)) {
+				continue;
+			}
+			$applicableDays++;
+			$done += bi_target_rule_units_for_day($monthData, $rule, $day, $selectedMonth);
 		}
+
+		// Hari/periode bergembok: tampilkan batang kosong, bukan "gagal target".
+		if ($applicableDays === 0) {
+			$target = 0.0;
+		}
+		$reached = $applicableDays > 0 && $done >= $target;
 
 		$firstDay = $days[0] ?? 0;
 		$lastDay = $days === [] ? $firstDay : $days[count($days) - 1];
@@ -551,7 +645,7 @@ function bi_target_rule_period_breakdown(array $monthData, int $daysInMonth, arr
 			'label' => $firstDay === $lastDay ? (string) $firstDay : $firstDay . '-' . $lastDay,
 			'target' => $target,
 			'done' => $done,
-			'reached' => $done >= $target,
+			'reached' => $reached,
 			'percent' => $target > 0 ? round(min($done, $target) / $target * 100, 1) : 0,
 		];
 	}

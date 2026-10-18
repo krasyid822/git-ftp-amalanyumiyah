@@ -4,3 +4,10 @@
 # test/admin.json berisi kredensial admin terenkripsi. File ini di-ignore git
 # (tidak ikut ke GitHub), tetapi HARUS ada di server agar halaman login bekerja.
 !test/admin.json
+
+# Berkas rahasia lain yang tetap di-ignore git (tidak ke GitHub) tetapi harus
+# ada di server: token manifest (test/_manifest/.token) dan kunci AI
+# (test/_ai/openrouter_key, github_token, issue_repo). Baris '!' = selalu
+# upload; untuk direktori, git-ftp mengunggah seluruh berkas di dalamnya.
+!test/_manifest
+!test/_ai

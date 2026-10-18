@@ -94,12 +94,12 @@
         {
             "category": "ISTIGHFAR",
             "label": "Istighfar",
-            "target": "100 kali per hari",
+            "target": "200 kali per hari (maks 2 poin)",
             "period": "day",
-            "target_count": 100,
+            "target_count": 2,
             "mode": "numeric",
             "threshold": 100,
-            "detail": "Jika mau lebih dari ini, lebih baik.",
+            "detail": "100 kali = 1 poin, 200 kali ke atas = 2 poin (batas ideal/maksimal per hari).",
             "data_keys": ["istighfar"]
         }
     ]
