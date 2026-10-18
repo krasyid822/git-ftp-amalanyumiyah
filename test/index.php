@@ -43,6 +43,137 @@ if ($buildVal === '' || !preg_match('/^[0-9]+$/', $buildVal)) {
     $buildVal = '0';
 }
 
+// --- KARTU TARGET: fungsi bersama (render awal & AJAX) -----------------------
+// Menyusun data kartu target untuk satu bulan (key "YYYY-MM").
+// Butuh target_engine.php sudah di-require (fungsi bi_*).
+function bi_index_build_target_card(string $bulanKey, array $semuaData, array $daftarAturan, string $namaGrup): ?array
+{
+    if (!$daftarAturan || !preg_match('/^\d{4}-\d{2}$/', $bulanKey)) {
+        return null;
+    }
+    $tsBulan = strtotime($bulanKey . '-01');
+    if ($tsBulan === false) {
+        return null;
+    }
+    $jumlahHari = (int) date('t', $tsBulan);
+    if ($jumlahHari < 1) {
+        return null;
+    }
+
+    $monthData = $semuaData[$bulanKey] ?? [];
+    $ringkasTarget = bi_compute_target_summary($monthData, $jumlahHari, $daftarAturan, $bulanKey);
+    $kartuAturan = [];
+
+    foreach ($daftarAturan as $i => $aturan) {
+        $prog = $ringkasTarget['rules'][$i] ?? null;
+        if (!is_array($prog)) {
+            continue;
+        }
+
+        // Grafik "bayangan target": tiap batang punya tinggi target (ghost) dan
+        // tinggi capaian (isi). Skala disamakan per aturan.
+        $breakdown = bi_target_rule_period_breakdown($monthData, $jumlahHari, $aturan, $bulanKey);
+        $maxNilai = 1.0;
+        foreach ($breakdown as $b) {
+            $maxNilai = max($maxNilai, (float) $b['target'], (float) $b['done']);
+        }
+        $bars = [];
+        foreach ($breakdown as $b) {
+            $bars[] = [
+                'label'     => $b['label'],
+                'done'      => $b['done'],
+                'target'    => $b['target'],
+                'ghost_pct' => round((float) $b['target'] / $maxNilai * 100, 2),
+                'done_pct'  => round(min((float) $b['done'], $maxNilai) / $maxNilai * 100, 2),
+                'reached'   => (bool) $b['reached'],
+            ];
+        }
+
+        $kartuAturan[] = [
+            'category'         => $prog['category'],
+            'label'            => $prog['label'],
+            'target_text'      => trim((string) ($aturan['target'] ?? '')),
+            'percent'          => $prog['percent'],
+            'done'             => $prog['done'],
+            'done_raw'         => $prog['done_raw'] ?? $prog['done'],
+            'possible'         => $prog['possible'],
+            'periods_done'     => $prog['periods_done'],
+            'periods_possible' => $prog['periods_possible'],
+            'bars'             => $bars,
+        ];
+    }
+
+    return [
+        'nama_grup'   => $namaGrup,
+        'overall'     => $ringkasTarget['overall_percent'],
+        'bulan_key'   => $bulanKey,
+        'bulan_label' => date('F Y', $tsBulan),
+        'rules'       => $kartuAturan,
+    ];
+}
+
+// Merender HTML kartu target (isi dari #target-card-wrap).
+function bi_index_render_target_card(?array $targetCard): string
+{
+    if ($targetCard === null) {
+        return '<p class="tc-empty" style="margin:12px 0 0;font-size:.8rem;color:var(--md-sys-color-on-surface-variant)">Belum ada aturan target untuk bulan ini.</p>';
+    }
+    ob_start();
+    ?>
+    <div class="tc-card">
+        <div class="tc-head">
+            <div class="tc-title">
+                <i class="fa-solid fa-bullseye"></i> Target Bulan Ini
+                <span class="tc-group">grup <?= htmlspecialchars($targetCard['nama_grup']) ?></span>
+                <span class="tc-group"><?= htmlspecialchars($targetCard['bulan_label']) ?></span>
+            </div>
+            <div class="tc-overall">
+                <b><?= htmlspecialchars(bi_format_target_number($targetCard['overall'])) ?>%</b>
+                <span>capaian keseluruhan</span>
+            </div>
+        </div>
+        <div class="tc-bar"><span style="width:<?= (float) min(100, max(0, $targetCard['overall'])) ?>%"></span></div>
+
+        <div class="tc-rules">
+            <?php foreach ($targetCard['rules'] as $ruleKartu): ?>
+            <div class="tc-rule">
+                <div class="tc-rule-head">
+                    <span class="tc-rule-label"><?= htmlspecialchars($ruleKartu['label']) ?></span>
+                    <span class="tc-rule-pct"><?= htmlspecialchars(bi_format_target_number($ruleKartu['percent'])) ?>%</span>
+                </div>
+                <div class="tc-meta">
+                    <?php if (trim((string) $ruleKartu['category']) !== ''): ?>
+                        <span class="tc-cat"><?= htmlspecialchars(strtoupper((string) $ruleKartu['category'])) ?></span>
+                    <?php endif; ?>
+                    <?php if ($ruleKartu['target_text'] !== ''): ?>
+                        <span>target <?= htmlspecialchars($ruleKartu['target_text']) ?></span>
+                    <?php endif; ?>
+                    <span>capaian <?= htmlspecialchars(bi_format_target_number($ruleKartu['done_raw'] ?? $ruleKartu['done'])) ?> dari <?= htmlspecialchars(bi_format_target_number($ruleKartu['possible'])) ?></span>
+                </div>
+                <div class="tc-chart">
+                    <?php foreach ($ruleKartu['bars'] as $bar): ?>
+                        <div class="tc-col<?= $bar['reached'] ? ' tc-reached' : '' ?>"
+                             title="<?= htmlspecialchars('Periode ' . $bar['label'] . ': ' . bi_format_target_number($bar['done']) . ' / target ' . bi_format_target_number($bar['target'])) ?>">
+                            <span class="tc-ghost" style="height:<?= (float) $bar['ghost_pct'] ?>%"></span>
+                            <span class="tc-done" style="height:<?= (float) $bar['done_pct'] ?>%"></span>
+                        </div>
+                    <?php endforeach; ?>
+                </div>
+            </div>
+            <?php endforeach; ?>
+        </div>
+
+        <div class="tc-legend">
+            <span><i class="tc-sw tc-sw-ghost"></i> Bayangan = besar target</span>
+            <span><i class="tc-sw tc-sw-done"></i> Isi = capaian</span>
+            <span><i class="tc-sw tc-sw-good"></i> Target tercapai</span>
+            <span>Arahkan kursor ke batang untuk melihat angka target &amp; capaian.</span>
+        </div>
+    </div>
+    <?php
+    return (string) ob_get_clean();
+}
+
 // CATATAN: bi.php TIDAK di-load di sini. File itu mendefinisikan sebagian
 // fungsi bi_* yang sama dengan yang ada di bawah (mis. bi_normalize_quran_key),
 // sehingga meng-include-nya menimbulkan fatal "Cannot redeclare function".
@@ -61,6 +192,45 @@ const RAWATIB_DETAIL_KEYS = [
 if (isset($_POST['is_ajax'])) {
     header('Content-Type: application/json');
     $response = ['status' => 'error', 'message' => 'Aksi tidak diketahui.'];
+
+    // --- 0. AJAX: kartu target untuk bulan tertentu (navigasi bulan) ---
+    if ($_POST['is_ajax'] === 'get_target_card') {
+        require_once __DIR__ . '/target_engine.php';
+
+        $bulanKey = (string) ($_POST['bulan'] ?? date('Y-m'));
+        if (!preg_match('/^\d{4}-\d{2}$/', $bulanKey)) {
+            $bulanKey = date('Y-m');
+        }
+
+        $menteeDirT = dirname($dataFile);
+        $grupDirT   = dirname($menteeDirT);
+        if (isset($stubGroup) && is_file(__DIR__ . '/../' . $stubGroup . '/target_settings.json')) {
+            $grupDirT = __DIR__ . '/../' . $stubGroup;
+        }
+        $enabledT = (basename($menteeDirT) !== 'test' || isset($stubGroup))
+            && is_file($grupDirT . '/target_settings.json');
+
+        $cardT = null;
+        if ($enabledT) {
+            $aturanT = bi_load_target_settings_file($grupDirT . '/target_settings.json');
+            $daftarT = [];
+            foreach (($aturanT['rules'] ?? []) as $a) {
+                if (is_array($a)) {
+                    $daftarT[] = $a;
+                }
+            }
+            $semuaT = bacaDataAmalan($dataFile);
+            $cardT  = bi_index_build_target_card($bulanKey, $semuaT, $daftarT, basename($grupDirT));
+        }
+
+        echo json_encode([
+            'status'  => 'success',
+            'enabled' => $enabledT,
+            'bulan'   => $bulanKey,
+            'html'    => bi_index_render_target_card($cardT),
+        ]);
+        exit;
+    }
 
     // --- A. AJAX UNTUK MENYIMPAN DATA ---
     if ($_POST['is_ajax'] === 'save_data' && isset($_POST['tanggal'])) {
@@ -876,6 +1046,7 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
 // Muncul HANYA kalau grup pemilik mentee ini punya target_settings.json.
 // Ditaruh di bawah tabel input supaya tidak mengganggu tampilan penginputan.
 $targetCard = null;
+$targetEnabled = false;
 $menteeDirTarget = dirname($dataFile);
 $grupDirTarget   = dirname($menteeDirTarget);
 // Support stub: gunakan grup dari parameter ?group= untuk mencari
@@ -883,7 +1054,8 @@ $grupDirTarget   = dirname($menteeDirTarget);
 if (isset($stubGroup) && is_file(__DIR__ . '/../' . $stubGroup . '/target_settings.json')) {
     $grupDirTarget = __DIR__ . '/../' . $stubGroup;
 }
-if ((basename($menteeDirTarget) !== 'test' || isset($stubGroup)) && is_file($grupDirTarget . '/target_settings.json')) {
+$targetEnabled = (basename($menteeDirTarget) !== 'test' || isset($stubGroup)) && is_file($grupDirTarget . '/target_settings.json');
+if ($targetEnabled) {
     require_once __DIR__ . '/target_engine.php';
 
     $aturanTarget = bi_load_target_settings_file($grupDirTarget . '/target_settings.json');
@@ -907,56 +1079,7 @@ if ((basename($menteeDirTarget) !== 'test' || isset($stubGroup)) && is_file($gru
         $daftar_amalan['SHOLAT SUNNAH']['witir'] = 'Witir';
     }
 
-    if ($daftarAturan) {
-        $ringkasTarget = bi_compute_target_summary($dataBulanIni, $jumlah_hari, $daftarAturan, $bulan_sekarang);
-        $kartuAturan = [];
-
-        foreach ($daftarAturan as $i => $aturan) {
-            $prog = $ringkasTarget['rules'][$i] ?? null;
-            if (!is_array($prog)) {
-                continue;
-            }
-
-            // Grafik "bayangan target": tiap batang punya tinggi target (ghost)
-            // dan tinggi capaian (isi). Skala disamakan per aturan.
-            $breakdown = bi_target_rule_period_breakdown($dataBulanIni, $jumlah_hari, $aturan, $bulan_sekarang);
-            $maxNilai = 1.0;
-            foreach ($breakdown as $b) {
-                $maxNilai = max($maxNilai, (float) $b['target'], (float) $b['done']);
-            }
-            $bars = [];
-            foreach ($breakdown as $b) {
-                $bars[] = [
-                    'label'     => $b['label'],
-                    'done'      => $b['done'],
-                    'target'    => $b['target'],
-                    'ghost_pct' => round((float) $b['target'] / $maxNilai * 100, 2),
-                    'done_pct'  => round(min((float) $b['done'], $maxNilai) / $maxNilai * 100, 2),
-                    'reached'   => (bool) $b['reached'],
-                ];
-            }
-
-            $kartuAturan[] = [
-                'category'         => $prog['category'],
-                'label'            => $prog['label'],
-                'target_text'      => trim((string) ($aturan['target'] ?? '')),
-                'percent'          => $prog['percent'],
-                'done'             => $prog['done'],
-                'done_raw'         => $prog['done_raw'] ?? $prog['done'],
-                'possible'         => $prog['possible'],
-                'periods_done'     => $prog['periods_done'],
-                'periods_possible' => $prog['periods_possible'],
-                'bars'             => $bars,
-            ];
-        }
-
-        $targetCard = [
-            'nama_grup'   => basename($grupDirTarget),
-            'overall'     => $ringkasTarget['overall_percent'],
-            'bulan_label' => date('F Y'),
-            'rules'       => $kartuAturan,
-        ];
-    }
+    $targetCard = bi_index_build_target_card($bulan_sekarang, $semuaDataAmalan, $daftarAturan, basename($grupDirTarget));
 }
 
 ?>
@@ -3631,7 +3754,7 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             </div>
         </div>
 
-        <?php if ($targetCard !== null): ?>
+        <?php if ($targetEnabled): ?>
         <style>
         .tc-card{margin-top:24px;padding:18px 18px 14px;border:1px solid var(--md-sys-color-outline-variant);border-radius:16px;
                  background:var(--md-sys-color-surface-container-low,var(--md-sys-color-surface));
@@ -3674,55 +3797,8 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
         .tc-sw-done{background:var(--md-sys-color-primary)}
         .tc-sw-good{background:var(--color-good,var(--md-sys-color-primary))}
         </style>
-        <div class="tc-card">
-            <div class="tc-head">
-                <div class="tc-title">
-                    <i class="fa-solid fa-bullseye"></i> Target Bulan Ini
-                    <span class="tc-group">grup <?= htmlspecialchars($targetCard['nama_grup']) ?></span>
-                    <span class="tc-group"><?= htmlspecialchars($targetCard['bulan_label']) ?></span>
-                </div>
-                <div class="tc-overall">
-                    <b><?= htmlspecialchars(bi_format_target_number($targetCard['overall'])) ?>%</b>
-                    <span>capaian keseluruhan</span>
-                </div>
-            </div>
-            <div class="tc-bar"><span style="width:<?= (float) min(100, max(0, $targetCard['overall'])) ?>%"></span></div>
-
-            <div class="tc-rules">
-                <?php foreach ($targetCard['rules'] as $ruleKartu): ?>
-                <div class="tc-rule">
-                    <div class="tc-rule-head">
-                        <span class="tc-rule-label"><?= htmlspecialchars($ruleKartu['label']) ?></span>
-                        <span class="tc-rule-pct"><?= htmlspecialchars(bi_format_target_number($ruleKartu['percent'])) ?>%</span>
-                    </div>
-                    <div class="tc-meta">
-                        <?php if (trim((string) $ruleKartu['category']) !== ''): ?>
-                            <span class="tc-cat"><?= htmlspecialchars(strtoupper((string) $ruleKartu['category'])) ?></span>
-                        <?php endif; ?>
-                        <?php if ($ruleKartu['target_text'] !== ''): ?>
-                            <span>target <?= htmlspecialchars($ruleKartu['target_text']) ?></span>
-                        <?php endif; ?>
-                        <span>capaian <?= htmlspecialchars(bi_format_target_number($ruleKartu['done_raw'] ?? $ruleKartu['done'])) ?> dari <?= htmlspecialchars(bi_format_target_number($ruleKartu['possible'])) ?></span>
-                    </div>
-                    <div class="tc-chart">
-                        <?php foreach ($ruleKartu['bars'] as $bar): ?>
-                            <div class="tc-col<?= $bar['reached'] ? ' tc-reached' : '' ?>"
-                                 title="<?= htmlspecialchars('Periode ' . $bar['label'] . ': ' . bi_format_target_number($bar['done']) . ' / target ' . bi_format_target_number($bar['target'])) ?>">
-                                <span class="tc-ghost" style="height:<?= (float) $bar['ghost_pct'] ?>%"></span>
-                                <span class="tc-done" style="height:<?= (float) $bar['done_pct'] ?>%"></span>
-                            </div>
-                        <?php endforeach; ?>
-                    </div>
-                </div>
-                <?php endforeach; ?>
-            </div>
-
-            <div class="tc-legend">
-                <span><i class="tc-sw tc-sw-ghost"></i> Bayangan = besar target</span>
-                <span><i class="tc-sw tc-sw-done"></i> Isi = capaian</span>
-                <span><i class="tc-sw tc-sw-good"></i> Target tercapai</span>
-                <span>Arahkan kursor ke batang untuk melihat angka target &amp; capaian.</span>
-            </div>
+        <div id="target-card-wrap">
+            <?= bi_index_render_target_card($targetCard) ?>
         </div>
         <?php endif; ?>
 
@@ -3772,7 +3848,8 @@ window.APP_CONFIG = {
     prayerKeys: <?= json_encode(array_keys($daftar_amalan['SHOLAT WAJIB'])); ?>,
     ayyamulBidhInfo: <?= json_encode($ayyamul_bidh_info); ?>,
     displayName: <?= json_encode($displayName); ?>,
-    build: <?= json_encode($buildVal); ?>
+    build: <?= json_encode($buildVal); ?>,
+    targetEnabled: <?= $targetEnabled ? 'true' : 'false' ?>
 };
 </script>
 <?php

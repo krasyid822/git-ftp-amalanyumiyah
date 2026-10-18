@@ -199,6 +199,32 @@ function bi_extract_redirect_target(string $indexFile): ?string
 	return null;
 }
 
+// Stub baru (satu orang beberapa grup) TIDAK lagi me-redirect, melainkan
+// me-render test/index.php DI TEMPAT lewat require. Deteksi berkas yang
+// di-require itu supaya BI bisa menemukan data mentee stub (data-nya ada di
+// folder test, bukan di folder mentee).
+function bi_extract_require_index_target(string $indexFile): ?string
+{
+	if (!is_file($indexFile)) {
+		return null;
+	}
+
+	$contents = file_get_contents($indexFile);
+	if ($contents === false) {
+		return null;
+	}
+
+	// Contoh: require __DIR__ . '/../../test/index.php';
+	if (preg_match('/(?:require|include)(?:_once)?\s*(?:\(\s*)?__DIR__\s*\.\s*[\'"]([^\'"]+)[\'"]/i', $contents, $matches)) {
+		$rel = trim($matches[1]);
+		if ($rel !== '' && substr($rel, -4) === '.php') {
+			return ltrim(str_replace(['/', '\\'], DIRECTORY_SEPARATOR, $rel), DIRECTORY_SEPARATOR);
+		}
+	}
+
+	return null;
+}
+
 function bi_resolve_redirect_path(string $basePath, string $relativeTarget): ?string
 {
 	$relativeTarget = trim($relativeTarget);
@@ -227,19 +253,36 @@ function bi_resolve_participant_data_file(string $folderPath): array
 		}
 
 		$redirectTarget = bi_extract_redirect_target($indexFile);
-		if ($redirectTarget === null) {
-			break;
+		if ($redirectTarget !== null) {
+			$currentPath = bi_resolve_redirect_path($currentPath, $redirectTarget);
+			if ($currentPath === null) {
+				break;
+			}
+
+			$directDataFile = $currentPath . DIRECTORY_SEPARATOR . 'data_amalan.json';
+			if (is_file($directDataFile)) {
+				return [$directDataFile, $currentPath];
+			}
+			continue;
 		}
 
-		$currentPath = bi_resolve_redirect_path($currentPath, $redirectTarget);
-		if ($currentPath === null) {
-			break;
+		// Stub baru: ikuti berkas yang di-require (render in-place).
+		$requireTarget = bi_extract_require_index_target($indexFile);
+		if ($requireTarget !== null) {
+			$requiredFile = realpath($currentPath . DIRECTORY_SEPARATOR . $requireTarget);
+			if ($requiredFile === false || !is_file($requiredFile)) {
+				break;
+			}
+
+			$currentPath = dirname($requiredFile);
+			$directDataFile = $currentPath . DIRECTORY_SEPARATOR . 'data_amalan.json';
+			if (is_file($directDataFile)) {
+				return [$directDataFile, $currentPath];
+			}
+			continue;
 		}
 
-		$directDataFile = $currentPath . DIRECTORY_SEPARATOR . 'data_amalan.json';
-		if (is_file($directDataFile)) {
-			return [$directDataFile, $currentPath];
-		}
+		break;
 	}
 
 	return [null, null];

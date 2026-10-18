@@ -565,6 +565,24 @@ document.addEventListener('DOMContentLoaded', function() {
         }, 300);
     }
 
+    // Segarkan kartu target agar mengikuti bulan yang sedang dilihat.
+    async function refreshTargetCard(bulanKey) {
+        const wrap = document.getElementById('target-card-wrap');
+        if (!wrap) return;
+        try {
+            const formData = new FormData();
+            formData.append('is_ajax', 'get_target_card');
+            formData.append('bulan', bulanKey);
+            const res = await fetch('', { method: 'POST', body: formData });
+            const data = await res.json();
+            if (data && data.status === 'success' && typeof data.html === 'string') {
+                wrap.innerHTML = data.html;
+            }
+        } catch (e) {
+            console.error('Gagal memuat kartu target:', e);
+        }
+    }
+
     let lastDateValue = tanggalInput.value;
     tanggalInput.addEventListener('change', async function() {
         const newDate = this.value;
@@ -579,11 +597,15 @@ document.addEventListener('DOMContentLoaded', function() {
         await new Promise((resolve) => setTimeout(resolve, 30));
 
         // Respons instan: tabel dibangun ulang dari data lokal TANPA menunggu
-        // jaringan. Info Ayyamul Bidh diambil di latar belakang, lalu penanda
-        // (hint) disegarkan begitu datanya tiba.
+        // jaringan. Info Ayyamul Bidh + kartu target diambil di latar belakang,
+        // lalu penanda (hint) disegarkan begitu datanya tiba.
         updateFormForDate(newDate);
+        const bulanKey = newDate.substring(0, 7);
         try {
-            await fetchAyyamulBidh(newDate);
+            await Promise.all([
+                fetchAyyamulBidh(newDate),
+                refreshTargetCard(bulanKey)
+            ]);
             // Hanya segarkan bila bulan belum berpindah lagi (hindari hasil balapan).
             if (tanggalInput.value === newDate) updateFormForDate(newDate);
         } finally {
