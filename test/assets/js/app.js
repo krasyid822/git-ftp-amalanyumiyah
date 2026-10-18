@@ -433,7 +433,21 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const downloadPdfBtn = document.getElementById('download-pdf-btn');
     if (downloadPdfBtn) {
-        downloadPdfBtn.addEventListener('click', downloadCurrentTableAsPdf);
+        downloadPdfBtn.addEventListener('click', async () => {
+            if (downloadPdfBtn.disabled) return;
+            const originalHtml = downloadPdfBtn.innerHTML;
+            downloadPdfBtn.disabled = true;
+            downloadPdfBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Menyiapkan PDF…';
+            try {
+                await downloadCurrentTableAsPdf();
+            } catch (error) {
+                console.error('Gagal membuat PDF:', error);
+                alert('Gagal membuat PDF. Coba muat ulang halaman.');
+            } finally {
+                downloadPdfBtn.disabled = false;
+                downloadPdfBtn.innerHTML = originalHtml;
+            }
+        });
     }
 
     // Editable cell event listener
@@ -534,15 +548,47 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
 
+    // Bar progres kecil di bawah navigator bulan.
+    const monthProgress = document.getElementById('month-progress');
+    let monthProgressHideTimer = null;
+    function startMonthLoading() {
+        if (!monthProgress) return;
+        clearTimeout(monthProgressHideTimer);
+        monthProgress.classList.add('active');
+    }
+    function stopMonthLoading() {
+        if (!monthProgress) return;
+        // Jeda pendek supaya bar tidak berkedip untuk respons yang sangat cepat.
+        clearTimeout(monthProgressHideTimer);
+        monthProgressHideTimer = setTimeout(() => {
+            monthProgress.classList.remove('active');
+        }, 300);
+    }
+
     let lastDateValue = tanggalInput.value;
     tanggalInput.addEventListener('change', async function() {
         const newDate = this.value;
         const oldDate = lastDateValue;
         if (newDate === oldDate) return;
-        
+
         lastDateValue = newDate;
-        await fetchAyyamulBidh(newDate);
+
+        // Tampilkan bar dulu, lalu beri kesempatan browser menggambarnya sebelum
+        // pekerjaan berat (rebuild tabel) berjalan.
+        startMonthLoading();
+        await new Promise((resolve) => setTimeout(resolve, 30));
+
+        // Respons instan: tabel dibangun ulang dari data lokal TANPA menunggu
+        // jaringan. Info Ayyamul Bidh diambil di latar belakang, lalu penanda
+        // (hint) disegarkan begitu datanya tiba.
         updateFormForDate(newDate);
+        try {
+            await fetchAyyamulBidh(newDate);
+            // Hanya segarkan bila bulan belum berpindah lagi (hindari hasil balapan).
+            if (tanggalInput.value === newDate) updateFormForDate(newDate);
+        } finally {
+            stopMonthLoading();
+        }
     });
 
     // Initial Load Setup

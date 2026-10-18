@@ -11,21 +11,37 @@ if (!isset($dataFile)) {
 // __DIR__ adalah konstanta PHP yang berarti "direktori dari file ini".
 // Ini memastikan path akan selalu benar, tidak peduli dari mana file ini di-include.
 
-// Support stub redirect (contoh: ftj/rasyid/index.php).
+// Support stub "satu orang beberapa grup" (contoh: ftj/rasyid/index.php).
 // Satu orang bisa ada di banyak grup, jadi data_amalan.json tidak ada di folder
-// mentee itu sendiri. test/index.php dipanggil dengan ?mentee=x&group=y agar
-// tahu data file dan target settings mana yang harus dipakai.
+// mentee itu sendiri. File stub men-set $_GET['mentee'] & $_GET['group'] lalu
+// me-require test/index.php, agar tahu data file & target settings mana yang
+// dipakai (tanpa pindah URL, supaya tetap di dalam scope PWA).
 if (!empty($_GET['mentee']) && !empty($_GET['group'])) {
     $mentee = basename($_GET['mentee']);
     $group  = basename($_GET['group']);
-    // Simpan grup tujuan stub redirect untuk kartu target, meski data_amalan.json
-    // belum ada di folder mentee (satu orang di banyak grup).
+    // Simpan grup tujuan stub (via ?group=) untuk kartu target, meski
+    // data_amalan.json belum ada di folder mentee (satu orang di banyak grup).
     $stubGroup = $group;
     if (!isset($dataFile) && is_file(__DIR__ . '/../' . $group . '/' . $mentee . '/data_amalan.json')) {
         $dataFile = __DIR__ . '/../' . $group . '/' . $mentee . '/data_amalan.json';
     }
+    // Pengaman: pemanggil stub lama memakai redirect (302) sehingga $manifestPath
+    // yang di-set di file stub ikut hilang. Bila belum ada, pakai manifest milik
+    // mentee ini supaya PWA yang ter-install memakai identitas (nama/scope) benar.
+    if ((!isset($manifestPath) || $manifestPath === '') && preg_match('/^[A-Za-z0-9_.-]+$/', $mentee)) {
+        $manifestPath = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/manifest_' . $mentee . '.json';
+    }
 }
-// Akhir support stub redirect.
+// Akhir support stub.
+
+// --- NOMOR BUILD PWA ---
+// Dibaca sekali di awal agar bisa dipakai di <head> (manifest) maupun di bawah
+// (tampilan). push.sh menaikkannya tiap mode 'all'.
+$__buildFile = __DIR__ . '/build_number.txt';
+$buildVal = is_file($__buildFile) ? trim((string) file_get_contents($__buildFile)) : '0';
+if ($buildVal === '' || !preg_match('/^[0-9]+$/', $buildVal)) {
+    $buildVal = '0';
+}
 
 // CATATAN: bi.php TIDAK di-load di sini. File itu mendefinisikan sebagian
 // fungsi bi_* yang sama dengan yang ada di bawah (mis. bi_normalize_quran_key),
@@ -862,7 +878,7 @@ $displayName = isset($namaPengguna) ? $namaPengguna : 'Rasyid Kurniawan';
 $targetCard = null;
 $menteeDirTarget = dirname($dataFile);
 $grupDirTarget   = dirname($menteeDirTarget);
-// Support stub redirect: gunakan grup dari parameter ?group= untuk mencari
+// Support stub: gunakan grup dari parameter ?group= untuk mencari
 // target_settings.json, meski data_amalan.json berada di grup lain.
 if (isset($stubGroup) && is_file(__DIR__ . '/../' . $stubGroup . '/target_settings.json')) {
     $grupDirTarget = __DIR__ . '/../' . $stubGroup;
@@ -958,6 +974,8 @@ if ((basename($menteeDirTarget) !== 'test' || isset($stubGroup)) && is_file($gru
 // mengirim header CORS sehingga browser memblokirnya.
 $__manifestDefault = 'https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/manifest_test.json';
 $__manifestHref = (isset($manifestPath) && $manifestPath !== '') ? $manifestPath : $__manifestDefault;
+// Sertakan nomor build agar browser mengambil manifest terbaru tiap push.
+$__manifestHref .= (strpos($__manifestHref, '?') === false ? '?' : '&') . 'v=' . rawurlencode($buildVal);
 echo '<link rel="manifest" href="' . htmlspecialchars($__manifestHref) . '">';
 echo '<link rel="icon" type="image/png" sizes="192x192" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">';
 echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasyid822/for-manifest-json-pwa/main/icons/icon-192.png">';
@@ -2852,6 +2870,41 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             transform: scale(0.95);
         }
 
+        /* Bar progres kecil di bawah navigator bulan (indeterminate) */
+        .month-progress {
+            position: relative;
+            height: 3px;
+            width: 100%;
+            max-width: 420px;
+            margin: 0 auto 6px auto;
+            border-radius: 3px;
+            overflow: hidden;
+            opacity: 0;
+            transition: opacity 0.15s ease;
+            pointer-events: none;
+        }
+        .month-progress.active {
+            opacity: 1;
+            background: var(--md-sys-color-surface-variant, #E7E0EC);
+        }
+        .month-progress > span {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            width: 40%;
+            border-radius: 3px;
+            background: var(--md-sys-color-primary, #006A6A);
+            animation: monthProgressSlide 1s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+        @keyframes monthProgressSlide {
+            0%   { transform: translateX(-110%); }
+            100% { transform: translateX(260%); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .month-progress > span { animation-duration: 1.8s; }
+        }
+
         /* Mini Confirm Popover untuk Quick Toggle */
         .mini-confirm-popover {
             position: absolute;
@@ -3466,6 +3519,7 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             <!-- Invisible datepicker for browser-native calendar navigation -->
             <input type="date" id="native-datepicker" style="position: absolute; opacity: 0; pointer-events: none; width: 0; height: 0; overflow: hidden; left: 50%; top: 50%;">
         </div>
+        <div class="month-progress" id="month-progress" aria-hidden="true"><span></span></div>
         <div class="table-wrapper">
             <table>
                 <thead>
@@ -3683,11 +3737,7 @@ echo '<link rel="apple-touch-icon" href="https://raw.githubusercontent.com/krasy
             </div>
         </div>
         <div class="build-number-container" style="font-size: 0.75rem; color: var(--md-sys-color-on-surface-variant); opacity: 0.7; font-weight: 700; width: 100%; text-align: center;">
-            <?php
-            $buildFile = __DIR__ . '/build_number.txt';
-            $buildVal = file_exists($buildFile) ? trim(file_get_contents($buildFile)) : '0';
-            echo 'v1.0.0+' . htmlspecialchars($buildVal);
-            ?>
+            <?= 'v1.0.1+' . htmlspecialchars($buildVal) ?>
         </div>
     </div>
 
@@ -3721,7 +3771,8 @@ window.APP_CONFIG = {
     rawatibDetailsKeys: <?= json_encode(array_keys($rawatib_details)); ?>,
     prayerKeys: <?= json_encode(array_keys($daftar_amalan['SHOLAT WAJIB'])); ?>,
     ayyamulBidhInfo: <?= json_encode($ayyamul_bidh_info); ?>,
-    displayName: <?= json_encode($displayName); ?>
+    displayName: <?= json_encode($displayName); ?>,
+    build: <?= json_encode($buildVal); ?>
 };
 </script>
 <?php
@@ -3744,7 +3795,7 @@ if (defined('PROJECT_ROOT')) {
     }
 }
 ?>
-<script type="module" src="<?= $scriptRelativePath ?>assets/js/app.js"></script>
+<script type="module" src="<?= $scriptRelativePath ?>assets/js/app.js?v=<?= htmlspecialchars($buildVal) ?>"></script>
 
 <div id="table-inline-popover" class="table-popover" style="display: none;">
     <div class="popover-header">

@@ -12,6 +12,9 @@
 # Urutan penting: FTP di-push terakhir. Kalau push GitHub sukses tapi FTP
 # gagal, perubahan Anda tetap tersimpan di GitHub dan bisa dicoba ulang.
 #
+# Mode 'all' menaikkan nomor build PWA (test/build_number.txt) satu langkah
+# sebelum commit, lalu ikut ter-push ke GitHub + FTP.
+#
 # Kredensial dibaca dari ~/.netrc, konfigurasi URL dari git config.
 
 set -euo pipefail
@@ -69,6 +72,28 @@ do_github() {
     step "Push ke GitHub (origin/main)..."
     run git push origin main
     ok "GitHub tersinkron."
+}
+
+# Naikkan nomor build PWA (test/build_number.txt) satu langkah. Dipakai halaman
+# mentee sebagai v1.0.1+<build> sekaligus penghancur cache (query ?v=<build>).
+# Hanya dijalankan pada mode 'all', SEBELUM commit, agar ikut ter-commit.
+bump_build() {
+    local f="test/build_number.txt"
+    [ -d test ] || return 0
+    local n=0
+    if [ -f "$f" ]; then
+        n="$(tr -dc '0-9' < "$f")"
+    fi
+    n=$(( ${n:-0} + 1 ))
+    printf '%s' "$n" > "$f"
+
+    # Selaraskan versi cache service worker dengan nomor build. Dengan begitu
+    # sw.js berubah tiap push, browser memasang SW baru, dan cache lama dibuang.
+    if [ -f sw.js ]; then
+        sed -i -E "s/(const CACHE_NAME = 'tracker-amalan-v)[0-9]+(';)/\1${n}\2/" sw.js
+    fi
+
+    ok "Build number PWA -> $n (cache sw.js v$n)"
 }
 
 do_ftp() {
@@ -144,6 +169,7 @@ case "${1:-all}" in
         step "HEAD server: $(git ftp show 2>/dev/null | head -1 | cut -d' ' -f2 || echo '?')"
         ;;
     all)
+        bump_build
         do_commit "${2:-}"
         do_github
         do_ftp
